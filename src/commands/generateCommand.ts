@@ -4,25 +4,104 @@ import {
   generateApi,
   GenerateResult,
   GenerateChange,
+  PromptTemplate,
 } from "../api/generate.api";
 import { apisApi } from "../api/apis.api";
 
-export async function generateCmd() {
-  const editor = vscode.window.activeTextEditor;
-  const selected = editor?.document.getText(editor.selection);
+const FRAMEWORKS = [
+  { label: "React", value: "React 18+ with TypeScript" },
+  { label: "Vue.js", value: "Vue 3 with Composition API and TypeScript" },
+  { label: "Angular", value: "Angular 17+ with TypeScript" },
+  { label: "Svelte", value: "SvelteKit with TypeScript" },
+  { label: "Next.js", value: "Next.js 14+ App Router with TypeScript" },
+];
 
-  const prompt = await vscode.window.showInputBox({
-    title: "UI Gen AI — Generate Code",
-    prompt: "Describe the UI you want to generate",
-    placeHolder:
-      "e.g. Create a user management dashboard with table, search, and CRUD",
-    value: selected || "",
-    ignoreFocusOut: true,
-  });
-  if (!prompt?.trim()) {
-    return;
+const DESIGN_SYSTEMS = [
+  { label: "MUI (Material UI)", value: "Material UI (MUI) v5" },
+  { label: "Ant Design (AntD)", value: "Ant Design (AntD) v5" },
+  { label: "shadcn/ui", value: "shadcn/ui with Tailwind CSS" },
+  { label: "Tailwind CSS", value: "Tailwind CSS v3 (utility-first)" },
+  { label: "Chakra UI", value: "Chakra UI v2" },
+  { label: "None", value: "" },
+];
+
+export async function generateCmd() {
+  // ── 1. Prompt source ──
+  const promptSource = await vscode.window.showQuickPick(
+    [
+      { label: "✍️  Custom Prompt", description: "Enter your own prompt", value: "custom" },
+      { label: "📋  Pre-built Template", description: "Fetch prompt templates from backend", value: "template" },
+    ],
+    { title: "UI Gen AI — Prompt Source", placeHolder: "How do you want to provide the prompt?" },
+  );
+  if (!promptSource) { return; }
+
+  let prompt: string | undefined;
+
+  if (promptSource.value === "custom") {
+    const editor = vscode.window.activeTextEditor;
+    const selected = editor?.document.getText(editor.selection);
+    prompt = await vscode.window.showInputBox({
+      title: "UI Gen AI — Custom Prompt",
+      prompt: "Describe the UI you want to generate",
+      placeHolder: "e.g. Create a user management dashboard with table, search, and CRUD",
+      value: selected || "",
+      ignoreFocusOut: true,
+    });
+  } else {
+    // Fetch templates from backend
+    let templates: PromptTemplate[] = [];
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Fetching prompt templates..." },
+      async () => {
+        try {
+          templates = await generateApi.getTemplates();
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to fetch templates: ${e.message}`);
+        }
+      },
+    );
+    if (templates.length === 0) {
+      vscode.window.showWarningMessage("No templates available. Please use a custom prompt.");
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      templates.map((t) => ({
+        label: t.label,
+        description: t.description,
+        detail: t.prompt.length > 120 ? t.prompt.slice(0, 120) + "…" : t.prompt,
+        value: t.prompt,
+      })),
+      { title: "UI Gen AI — Select Template", placeHolder: "Choose a pre-built prompt template", matchOnDetail: true },
+    );
+    if (!picked) { return; }
+
+    // Allow user to optionally edit the template prompt
+    prompt = await vscode.window.showInputBox({
+      title: "UI Gen AI — Edit Template Prompt (optional)",
+      prompt: "You can customize the template prompt or press Enter to use as-is",
+      value: picked.value,
+      ignoreFocusOut: true,
+    });
   }
 
+  if (!prompt?.trim()) { return; }
+
+  // ── 2. Framework selection ──
+  const framework = await vscode.window.showQuickPick(
+    FRAMEWORKS.map((f) => ({ label: f.label, value: f.value })),
+    { title: "Framework", placeHolder: "Select the frontend framework" },
+  );
+  if (!framework) { return; }
+
+  // ── 3. Design System selection ──
+  const designSystem = await vscode.window.showQuickPick(
+    DESIGN_SYSTEMS.map((d) => ({ label: d.label, value: d.value })),
+    { title: "Design System / CSS", placeHolder: "Select the design system" },
+  );
+  if (!designSystem) { return; }
+
+  // ── 4. AI Provider + Model ──
   const cfg = vscode.workspace.getConfiguration("uigenai");
   const provider = await vscode.window.showQuickPick(
     [
@@ -31,9 +110,7 @@ export async function generateCmd() {
     ],
     { title: "AI Provider" },
   );
-  if (!provider) {
-    return;
-  }
+  if (!provider) { return; }
 
   const model = await vscode.window.showInputBox({
     title: "Model",
@@ -42,11 +119,9 @@ export async function generateCmd() {
         ? cfg.get("defaultModel", "gemini-2.0-flash")
         : "gpt-4o",
   });
-  if (!model) {
-    return;
-  }
+  if (!model) { return; }
 
-  // Optional: link to an API
+  // ── 5. Optional: link to an API ──
   let apiId: string | undefined;
   const linkApi = await vscode.window.showQuickPick(
     [
@@ -69,14 +144,20 @@ export async function generateCmd() {
         );
         apiId = pick?.value;
       } else {
-        vscode.window.showWarningMessage(
-          "No APIs found. Generating without saving.",
-        );
+        vscode.window.showWarningMessage("No APIs found. Generating without saving.");
       }
     } catch {
       /* skip if not logged in */
     }
   }
+
+  // ── 6. Build final prompt with framework + design system ──
+  const extras: string[] = [];
+  extras.push(`**Framework**: ${framework.value}`);
+  if (designSystem.value) {
+    extras.push(`**Design System / Styling**: ${designSystem.value}`);
+  }
+  const finalPrompt = `${prompt.trim()}\n\n## Tech Preferences\n${extras.join("\n")}`;
 
   let result: GenerateResult | undefined;
   await vscode.window.withProgress(
@@ -87,7 +168,7 @@ export async function generateCmd() {
     async () => {
       try {
         result = await generateApi.generate({
-          prompt: prompt.trim(),
+          prompt: finalPrompt,
           provider: provider.value,
           model,
           apiId,
@@ -109,7 +190,8 @@ export async function generateCmd() {
     return;
   }
 
-  showPreview(result, prompt.trim());
+  const previewLabel = `${prompt.trim()}  [${framework.label} · ${designSystem.label}]`;
+  showPreview(result, previewLabel);
 }
 
 function showPreview(result: GenerateResult, prompt: string) {
