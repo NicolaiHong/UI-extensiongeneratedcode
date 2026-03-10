@@ -7,6 +7,8 @@ import {
   PromptTemplate,
 } from "../api/generate.api";
 import { apisApi } from "../api/apis.api";
+import { extractApiError } from "../utils/errors";
+import { escapeHtml } from "../utils/html";
 
 const FRAMEWORKS = [
   { label: "React", value: "React 18+ with TypeScript" },
@@ -29,12 +31,25 @@ export async function generateCmd() {
   // ── 1. Prompt source ──
   const promptSource = await vscode.window.showQuickPick(
     [
-      { label: "✍️  Custom Prompt", description: "Enter your own prompt", value: "custom" },
-      { label: "📋  Pre-built Template", description: "Fetch prompt templates from backend", value: "template" },
+      {
+        label: "✍️  Custom Prompt",
+        description: "Enter your own prompt",
+        value: "custom",
+      },
+      {
+        label: "📋  Pre-built Template",
+        description: "Fetch prompt templates from backend",
+        value: "template",
+      },
     ],
-    { title: "UI Gen AI — Prompt Source", placeHolder: "How do you want to provide the prompt?" },
+    {
+      title: "UI Gen AI — Prompt Source",
+      placeHolder: "How do you want to provide the prompt?",
+    },
   );
-  if (!promptSource) { return; }
+  if (!promptSource) {
+    return;
+  }
 
   let prompt: string | undefined;
 
@@ -44,7 +59,8 @@ export async function generateCmd() {
     prompt = await vscode.window.showInputBox({
       title: "UI Gen AI — Custom Prompt",
       prompt: "Describe the UI you want to generate",
-      placeHolder: "e.g. Create a user management dashboard with table, search, and CRUD",
+      placeHolder:
+        "e.g. Create a user management dashboard with table, search, and CRUD",
       value: selected || "",
       ignoreFocusOut: true,
     });
@@ -52,17 +68,24 @@ export async function generateCmd() {
     // Fetch templates from backend
     let templates: PromptTemplate[] = [];
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "Fetching prompt templates..." },
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Fetching prompt templates...",
+      },
       async () => {
         try {
           templates = await generateApi.getTemplates();
-        } catch (e: any) {
-          vscode.window.showErrorMessage(`Failed to fetch templates: ${e.message}`);
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(
+            `Failed to fetch templates: ${extractApiError(e)}`,
+          );
         }
       },
     );
     if (templates.length === 0) {
-      vscode.window.showWarningMessage("No templates available. Please use a custom prompt.");
+      vscode.window.showWarningMessage(
+        "No templates available. Please use a custom prompt.",
+      );
       return;
     }
     const picked = await vscode.window.showQuickPick(
@@ -72,34 +95,47 @@ export async function generateCmd() {
         detail: t.prompt.length > 120 ? t.prompt.slice(0, 120) + "…" : t.prompt,
         value: t.prompt,
       })),
-      { title: "UI Gen AI — Select Template", placeHolder: "Choose a pre-built prompt template", matchOnDetail: true },
+      {
+        title: "UI Gen AI — Select Template",
+        placeHolder: "Choose a pre-built prompt template",
+        matchOnDetail: true,
+      },
     );
-    if (!picked) { return; }
+    if (!picked) {
+      return;
+    }
 
     // Allow user to optionally edit the template prompt
     prompt = await vscode.window.showInputBox({
       title: "UI Gen AI — Edit Template Prompt (optional)",
-      prompt: "You can customize the template prompt or press Enter to use as-is",
+      prompt:
+        "You can customize the template prompt or press Enter to use as-is",
       value: picked.value,
       ignoreFocusOut: true,
     });
   }
 
-  if (!prompt?.trim()) { return; }
+  if (!prompt?.trim()) {
+    return;
+  }
 
   // ── 2. Framework selection ──
   const framework = await vscode.window.showQuickPick(
     FRAMEWORKS.map((f) => ({ label: f.label, value: f.value })),
     { title: "Framework", placeHolder: "Select the frontend framework" },
   );
-  if (!framework) { return; }
+  if (!framework) {
+    return;
+  }
 
   // ── 3. Design System selection ──
   const designSystem = await vscode.window.showQuickPick(
     DESIGN_SYSTEMS.map((d) => ({ label: d.label, value: d.value })),
     { title: "Design System / CSS", placeHolder: "Select the design system" },
   );
-  if (!designSystem) { return; }
+  if (!designSystem) {
+    return;
+  }
 
   // ── 4. AI Provider + Model ──
   const cfg = vscode.workspace.getConfiguration("uigenai");
@@ -110,7 +146,9 @@ export async function generateCmd() {
     ],
     { title: "AI Provider" },
   );
-  if (!provider) { return; }
+  if (!provider) {
+    return;
+  }
 
   const model = await vscode.window.showInputBox({
     title: "Model",
@@ -119,7 +157,9 @@ export async function generateCmd() {
         ? cfg.get("defaultModel", "gemini-2.0-flash")
         : "gpt-4o",
   });
-  if (!model) { return; }
+  if (!model) {
+    return;
+  }
 
   // ── 5. Optional: link to an API ──
   let apiId: string | undefined;
@@ -144,7 +184,9 @@ export async function generateCmd() {
         );
         apiId = pick?.value;
       } else {
-        vscode.window.showWarningMessage("No APIs found. Generating without saving.");
+        vscode.window.showWarningMessage(
+          "No APIs found. Generating without saving.",
+        );
       }
     } catch {
       /* skip if not logged in */
@@ -173,9 +215,9 @@ export async function generateCmd() {
           model,
           apiId,
         });
-      } catch (e: any) {
+      } catch (e: unknown) {
         vscode.window.showErrorMessage(
-          `Generation failed: ${e.response?.data?.error?.message || e.message}`,
+          `Generation failed: ${extractApiError(e)}`,
         );
       }
     },
@@ -203,16 +245,26 @@ function showPreview(result: GenerateResult, prompt: string) {
   );
 
   panel.webview.onDidReceiveMessage(async (msg) => {
-    if (msg.type === "applyAll") {
-      await applyFiles(result.changes);
-      panel.webview.postMessage({ type: "applied" });
-    }
-    if (msg.type === "applyFile") {
-      await applyFiles([result.changes[msg.i]]);
-    }
-    if (msg.type === "copy") {
-      await vscode.env.clipboard.writeText(result.changes[msg.i].codeContent);
-      vscode.window.showInformationMessage("Copied!");
+    switch (msg.type) {
+      case "applyAll":
+        await applyFiles(result.changes);
+        panel.webview.postMessage({ type: "applied" });
+        break;
+      case "applyFile": {
+        const file = result.changes[msg.i];
+        if (file) {
+          await applyFiles([file]);
+        }
+        break;
+      }
+      case "copy": {
+        const file = result.changes[msg.i];
+        if (file) {
+          await vscode.env.clipboard.writeText(file.codeContent);
+          vscode.window.showInformationMessage("Copied!");
+        }
+        break;
+      }
     }
   });
 
@@ -224,12 +276,6 @@ function showPreview(result: GenerateResult, prompt: string) {
       lines: c.codeContent.split("\n").length,
     })),
   );
-  const esc = (s: string) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
 
   panel.webview.html = /*html*/ `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
@@ -271,8 +317,8 @@ function showPreview(result: GenerateResult, prompt: string) {
 <div class="done" id="done">✅ Files applied to workspace!</div>
 <div class="hd"><div class="hd-top"><h2>⚡ Generated Code<span class="badge" id="cnt"></span></h2>
 <button class="btn bp" onclick="applyAll()" id="ab">📁 Apply All</button></div>
-<div class="prompt">💬 ${esc(prompt)}</div></div>
-${result.summary ? `<div class="sm">${esc(result.summary)}</div>` : ""}
+<div class="prompt">💬 ${escapeHtml(prompt)}</div></div>
+${result.summary ? `<div class="sm">${escapeHtml(result.summary)}</div>` : ""}
 <div class="main-tabs">
 <button class="main-tab active" onclick="switchTab('code')">📄 Code</button>
 <button class="main-tab" onclick="switchTab('preview')">👁️ Live Preview</button>

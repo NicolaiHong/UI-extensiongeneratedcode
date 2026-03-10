@@ -26,10 +26,7 @@ export class AuthManager {
         this._user = null;
       }
     }
-    initApiClient({
-      getToken: async () => this.secrets.get(AT_KEY),
-      onAuthFailed: () => this.onAuthFailed(),
-    });
+    this.reinitClient();
     this._onDidChange.fire(this._user);
   }
 
@@ -55,15 +52,19 @@ export class AuthManager {
   async loginWithTokens(tokens: AuthTokens): Promise<AuthUser> {
     await this.secrets.store(AT_KEY, tokens.accessToken);
     await this.secrets.store(RT_KEY, tokens.refreshToken);
-    initApiClient({
-      getToken: async () => this.secrets.get(AT_KEY),
-      onAuthFailed: () => this.onAuthFailed(),
-    });
-    const user = await authApi.getMe();
-    this._user = user;
-    await this.state.update(USER_KEY, JSON.stringify(user));
-    this._onDidChange.fire(user);
-    return user;
+    this.reinitClient();
+    try {
+      const user = await authApi.getMe();
+      this._user = user;
+      await this.state.update(USER_KEY, JSON.stringify(user));
+      this._onDidChange.fire(user);
+      return user;
+    } catch (e) {
+      // Token verification failed — roll back stored credentials
+      await this.secrets.delete(AT_KEY);
+      await this.secrets.delete(RT_KEY);
+      throw e;
+    }
   }
 
   async logout(): Promise<void> {
@@ -85,11 +86,15 @@ export class AuthManager {
     await this.secrets.store(AT_KEY, tokens.accessToken);
     await this.secrets.store(RT_KEY, tokens.refreshToken);
     await this.state.update(USER_KEY, JSON.stringify(user));
+    this.reinitClient();
+    this._onDidChange.fire(user);
+  }
+
+  private reinitClient(): void {
     initApiClient({
       getToken: async () => this.secrets.get(AT_KEY),
       onAuthFailed: () => this.onAuthFailed(),
     });
-    this._onDidChange.fire(user);
   }
 
   private onAuthFailed() {

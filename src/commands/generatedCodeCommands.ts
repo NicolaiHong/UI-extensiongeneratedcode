@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { generatedCodesApi, GeneratedCode } from "../api/generatedCodes.api";
+import { extractApiError } from "../utils/errors";
+import { escapeHtml, jsxToHtml } from "../utils/html";
 
 export async function viewGeneratedCodeCmd(apiId: string, codeId: string) {
   try {
@@ -40,10 +42,8 @@ export async function viewGeneratedCodeCmd(apiId: string, codeId: string) {
       language: code.language || "typescript",
     });
     await vscode.window.showTextDocument(doc, { preview: true });
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -56,17 +56,17 @@ function showCodePreviewPanel(code: GeneratedCode) {
   );
 
   let htmlContent = code.content;
-  const ext = code.file_path.toLowerCase();
+  const lowerPath = code.file_path.toLowerCase();
   if (
-    ext.endsWith(".jsx") ||
-    ext.endsWith(".tsx") ||
-    ext.endsWith(".vue") ||
-    ext.endsWith(".svelte")
+    lowerPath.endsWith(".jsx") ||
+    lowerPath.endsWith(".tsx") ||
+    lowerPath.endsWith(".vue") ||
+    lowerPath.endsWith(".svelte")
   ) {
     htmlContent = jsxToHtml(code.content);
   }
 
-  const isFullHtml = ext.endsWith(".html") || ext.endsWith(".htm");
+  const isFullHtml = lowerPath.endsWith(".html") || lowerPath.endsWith(".htm");
 
   panel.webview.html = /*html*/ `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
@@ -79,7 +79,7 @@ function showCodePreviewPanel(code: GeneratedCode) {
 .frame iframe{border:none;height:calc(100vh - 46px);background:#fff}
 </style></head><body>
 <div class="toolbar">
-<div class="title">👁️ ${code.file_path.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>
+<div class="title">👁️ ${escapeHtml(code.file_path)}</div>
 <button class="btn" onclick="setSize(375)">📱 Mobile</button>
 <button class="btn" onclick="setSize(768)">📟 Tablet</button>
 <button class="btn active" onclick="setSize('100%')">🖥️ Desktop</button>
@@ -94,29 +94,6 @@ function showCodePreviewPanel(code: GeneratedCode) {
 function setSize(w){const f=document.getElementById('pf');f.style.width=typeof w==='number'?w+'px':w;
 document.querySelectorAll('.btn').forEach(b=>b.classList.remove('active'));event.target.classList.add('active');}
 </script></body></html>`;
-}
-
-function jsxToHtml(code: string): string {
-  let c = code
-    .replace(/^import\s.*$/gm, "")
-    .replace(/^export\s+(default\s+)?/gm, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/interface\s+\w+\s*\{[^}]*\}/gs, "")
-    .replace(/type\s+\w+\s*=[^;]+;/g, "");
-
-  const fnMatch = c.match(
-    /(?:function\s+\w+|const\s+\w+\s*=\s*(?:\([^)]*\)|\w+)\s*(?:=>|:\s*\w+\s*=>))\s*\{?[\s\S]*?return\s*\(([\s\S]*?)\);?\s*\}?\s*;?\s*$/m,
-  );
-  let jsx = fnMatch ? fnMatch[1] : c;
-
-  jsx = jsx
-    .replace(/className=/g, "class=")
-    .replace(/htmlFor=/g, "for=")
-    .replace(/\{[^}]*\}/g, "")
-    .replace(/on[A-Z]\w*=[^\s>]*/g, "")
-    .replace(/<>|<\/>/g, "")
-    .trim();
-  return jsx;
 }
 
 export async function applyGeneratedCodeCmd(apiId: string, codeId: string) {
@@ -143,10 +120,8 @@ export async function applyGeneratedCodeCmd(apiId: string, codeId: string) {
 
     const doc = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(doc);
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -163,9 +138,7 @@ export async function deleteGeneratedCodeCmd(apiId: string, codeId: string) {
     await generatedCodesApi.delete(apiId, codeId);
     vscode.window.showInformationMessage("Code deleted.");
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }

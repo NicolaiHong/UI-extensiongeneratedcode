@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { AuthManager } from "./authManager";
 import { getServerUrl } from "../api/client";
+import { extractApiError } from "../utils/errors";
 
 export function showLoginWebview(
   extensionUri: vscode.Uri,
@@ -40,9 +41,11 @@ export function showLoginWebview(
         );
         panel.dispose();
       }
-    } catch (err: any) {
-      const m = err.response?.data?.error?.message || err.message || "Failed";
-      panel.webview.postMessage({ type: "error", message: m });
+    } catch (err: unknown) {
+      panel.webview.postMessage({
+        type: "error",
+        message: extractApiError(err),
+      });
     } finally {
       try {
         panel.webview.postMessage({ type: "loading", value: false });

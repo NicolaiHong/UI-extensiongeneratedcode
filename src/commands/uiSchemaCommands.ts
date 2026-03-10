@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { uiSchemasApi } from "../api/uiSchemas.api";
+import { extractApiError } from "../utils/errors";
 
 export async function createUiSchemaCmd(apiId: string) {
   const name = await vscode.window.showInputBox({
@@ -72,10 +73,8 @@ export async function createUiSchemaCmd(apiId: string) {
     const s = await uiSchemasApi.create(apiId, { name, schema_json: json });
     vscode.window.showInformationMessage(`UI Schema "${s.name}" created!`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -117,10 +116,8 @@ export async function editUiSchemaCmd(apiId: string, schemaId: string) {
     await uiSchemasApi.update(apiId, schemaId, { name, schema_json: json });
     vscode.window.showInformationMessage(`UI Schema updated!`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -137,9 +134,7 @@ export async function deleteUiSchemaCmd(apiId: string, schemaId: string) {
     await uiSchemasApi.delete(apiId, schemaId);
     vscode.window.showInformationMessage("UI Schema deleted.");
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }

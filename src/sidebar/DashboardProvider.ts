@@ -9,6 +9,8 @@ import { apiConfigsApi, ApiConfig } from "../api/apiConfigs.api";
 import { uiSchemasApi, UiSchema } from "../api/uiSchemas.api";
 import { generatedCodesApi, GeneratedCode } from "../api/generatedCodes.api";
 import { deploymentsApi, Deployment } from "../api/deployments.api";
+import { extractApiError } from "../utils/errors";
+import { escapeHtml } from "../utils/html";
 
 export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "uigenai.dashboard";
@@ -272,10 +274,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand("uigenai.generate");
           break;
       }
-    } catch (e: any) {
-      const m =
-        e.response?.data?.error?.message || e.message || "Unknown error";
-      vscode.window.showErrorMessage(m);
+    } catch (e: unknown) {
+      vscode.window.showErrorMessage(extractApiError(e));
     }
   }
 
@@ -364,7 +364,7 @@ ${
     ? `
   <div class="auth-user">
     <div class="avatar">${(user.displayName || user.email || "U")[0].toUpperCase()}</div>
-    <span>${esc(user.displayName || user.email || "User")}</span>
+    <span>${escapeHtml(user.displayName || user.email || "User")}</span>
   </div>
   <button class="btn-s" onclick="send('logout')">Logout</button>
 `
@@ -644,14 +644,6 @@ window.addEventListener('message', e => {
 </script>
 </body></html>`;
   }
-}
-
-function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 async function confirmDelete(thing: string): Promise<boolean> {

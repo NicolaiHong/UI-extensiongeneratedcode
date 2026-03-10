@@ -6,7 +6,9 @@ let _getToken: (() => Promise<string | undefined>) | null = null;
 let _onAuthFailed: (() => void) | null = null;
 
 export function getServerUrl(): string {
-  return vscode.workspace.getConfiguration("uigenai").get<string>("serverUrl", "http://localhost:3000");
+  return vscode.workspace
+    .getConfiguration("uigenai")
+    .get<string>("serverUrl", "http://localhost:3000");
 }
 
 export function initApiClient(opts: {
@@ -26,13 +28,17 @@ export function getApi(): AxiosInstance {
       timeout: 120_000,
     });
 
-    _instance.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-      if (_getToken) {
-        const token = await _getToken();
-        if (token) { config.headers.Authorization = `Bearer ${token}`; }
-      }
-      return config;
-    });
+    _instance.interceptors.request.use(
+      async (config: InternalAxiosRequestConfig) => {
+        if (_getToken) {
+          const token = await _getToken();
+          if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+          }
+        }
+        return config;
+      },
+    );
 
     _instance.interceptors.response.use(
       (r) => r,
@@ -42,10 +48,15 @@ export function getApi(): AxiosInstance {
           _onAuthFailed?.();
         }
         return Promise.reject(error);
-      }
+      },
     );
   }
   return _instance;
+}
+
+/** Extract payload from backend `{ success, data: T }` response wrapper. */
+export function unwrap(response: { data: any }): any {
+  return response.data?.data ?? response.data;
 }
 
 /** Raw axios without auth — for login/register/refresh */

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { apiConfigsApi } from "../api/apiConfigs.api";
+import { extractApiError } from "../utils/errors";
 
 export async function createApiConfigCmd(apiId: string) {
   const key = await vscode.window.showInputBox({
@@ -37,10 +38,8 @@ export async function createApiConfigCmd(apiId: string) {
     });
     vscode.window.showInformationMessage(`Config "${c.key}" created!`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -85,10 +84,8 @@ export async function editApiConfigCmd(apiId: string, configId: string) {
     });
     vscode.window.showInformationMessage(`Config updated!`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
 
@@ -105,9 +102,7 @@ export async function deleteApiConfigCmd(apiId: string, configId: string) {
     await apiConfigsApi.delete(apiId, configId);
     vscode.window.showInformationMessage("Config deleted.");
     vscode.commands.executeCommand("uigenai.refreshSidebar");
-  } catch (e: any) {
-    vscode.window.showErrorMessage(
-      `Failed: ${e.response?.data?.error?.message || e.message}`,
-    );
+  } catch (e: unknown) {
+    vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
   }
 }
