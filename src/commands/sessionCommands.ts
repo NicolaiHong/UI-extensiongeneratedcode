@@ -63,8 +63,36 @@ export async function runSessionCmd(projectId?: string) {
         );
         vscode.commands.executeCommand("uigenai.refreshSidebar");
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
+        const errMsg = extractApiError(e);
+
+        // If the error indicates missing inferrable documents, offer recovery
+        if (isMissingDocError(errMsg)) {
+          const action = await vscode.window.showWarningMessage(
+            `${errMsg}\n\nWould you like to infer the missing documents from a local folder?`,
+            "Infer from Folder",
+            "Cancel",
+          );
+          if (action === "Infer from Folder") {
+            vscode.commands.executeCommand(
+              "uigenai.inferFromFolder",
+              projectId,
+            );
+          }
+        } else {
+          vscode.window.showErrorMessage(`Failed: ${errMsg}`);
+        }
       }
     },
+  );
+}
+
+/** Check if the error message indicates missing OPENAPI or ENTITY_SCHEMA */
+function isMissingDocError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    (lower.includes("missing") || lower.includes("required")) &&
+    (lower.includes("document") ||
+      lower.includes("openapi") ||
+      lower.includes("entity"))
   );
 }

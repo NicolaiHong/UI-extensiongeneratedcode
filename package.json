@@ -4,39 +4,122 @@
   "description": "Generate production-ready React UI code from natural language prompts — full project management, AI generation, and deployment tracking",
   "version": "1.0.0",
   "publisher": "ui-gen-ai",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "uigenai.login", "title": "UI Gen AI: Login / Register" },
-      { "command": "uigenai.logout", "title": "UI Gen AI: Logout" },
-      { "command": "uigenai.generate", "title": "UI Gen AI: Generate Code", "icon": "$(sparkle)" },
-      { "command": "uigenai.setServer", "title": "UI Gen AI: Set Server URL" },
-      { "command": "uigenai.createProject", "title": "UI Gen AI: Create Project" },
-      { "command": "uigenai.createApi", "title": "UI Gen AI: Create API" },
-      { "command": "uigenai.uploadDocument", "title": "UI Gen AI: Upload Document" },
-      { "command": "uigenai.runSession", "title": "UI Gen AI: Run Generation Session" },
-      { "command": "uigenai.createDeployment", "title": "UI Gen AI: Create Deployment" },
-      { "command": "uigenai.refreshSidebar", "title": "Refresh", "icon": "$(refresh)" }
+      {
+        "command": "uigenai.login",
+        "title": "UI Gen AI: Login / Register"
+      },
+      {
+        "command": "uigenai.logout",
+        "title": "UI Gen AI: Logout"
+      },
+      {
+        "command": "uigenai.generate",
+        "title": "UI Gen AI: Generate Code",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "uigenai.setServer",
+        "title": "UI Gen AI: Set Server URL"
+      },
+      {
+        "command": "uigenai.createProject",
+        "title": "UI Gen AI: Create Project"
+      },
+      {
+        "command": "uigenai.createApi",
+        "title": "UI Gen AI: Create API"
+      },
+      {
+        "command": "uigenai.uploadDocument",
+        "title": "UI Gen AI: Upload Document"
+      },
+      {
+        "command": "uigenai.inferFromFolder",
+        "title": "UI Gen AI: Infer API & Entities from Folder"
+      },
+      {
+        "command": "uigenai.runSession",
+        "title": "UI Gen AI: Run Generation Session"
+      },
+      {
+        "command": "uigenai.createDeployment",
+        "title": "UI Gen AI: Create Deployment"
+      },
+      {
+        "command": "uigenai.refreshSidebar",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
-        { "id": "uigenai-sidebar", "title": "UI Gen AI", "icon": "$(code)" }
+        {
+          "id": "uigenai-sidebar",
+          "title": "UI Gen AI",
+          "icon": "$(code)"
+        }
       ]
     },
     "views": {
       "uigenai-sidebar": [
-        { "type": "webview", "id": "uigenai.dashboard", "name": "Dashboard" }
+        {
+          "type": "webview",
+          "id": "uigenai.dashboard",
+          "name": "Dashboard"
+        }
       ]
     },
     "configuration": {
       "title": "UI Gen AI",
       "properties": {
-        "uigenai.serverUrl": { "type": "string", "default": "http://localhost:3000", "description": "Backend API server URL" },
-        "uigenai.defaultProvider": { "type": "string", "enum": ["openai", "gemini"], "default": "gemini", "description": "Default AI provider" },
-        "uigenai.defaultModel": { "type": "string", "default": "gemini-2.0-flash", "description": "Default AI model" }
+        "uigenai.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "Backend API server URL"
+        },
+        "uigenai.defaultProvider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "gemini"
+          ],
+          "default": "gemini",
+          "description": "Default AI provider"
+        },
+        "uigenai.defaultModel": {
+          "type": "string",
+          "default": "gemini-2.0-flash",
+          "description": "Default AI model"
+        },
+        "uigenai.geminiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Gemini API key for local inference (stored in settings — consider using secrets for production)",
+          "markdownDescription": "API key for Gemini. Used by the inference feature to call Gemini directly from the extension."
+        },
+        "uigenai.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for local inference",
+          "markdownDescription": "API key for OpenAI. Used by the inference feature to call OpenAI directly from the extension."
+        },
+        "uigenai.openaiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI-compatible API base URL"
+        }
       }
     }
   },

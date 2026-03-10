@@ -6,6 +6,7 @@ import { initApiClient, getServerUrl } from "./api/client";
 import { createProjectCmd } from "./commands/projectCommands";
 import { createApiCmd } from "./commands/apiCommands";
 import { uploadDocumentCmd } from "./commands/documentCommands";
+import { inferFromFolderCmd } from "./commands/inferCommands";
 import { runSessionCmd } from "./commands/sessionCommands";
 import { createDeploymentCmd } from "./commands/deploymentCommands";
 import { generateCmd } from "./commands/generateCommand";
@@ -98,6 +99,9 @@ export async function activate(context: vscode.ExtensionContext) {
   reg("uigenai.createApi", () => createApiCmd());
   reg("uigenai.uploadDocument", (projectId?: string) =>
     uploadDocumentCmd(projectId),
+  );
+  reg("uigenai.inferFromFolder", (projectId?: string) =>
+    inferFromFolderCmd(projectId),
   );
   reg("uigenai.runSession", (projectId?: string) => runSessionCmd(projectId));
   reg("uigenai.createDeployment", () => createDeploymentCmd());
