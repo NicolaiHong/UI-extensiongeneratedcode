@@ -10,17 +10,19 @@ export async function runSessionCmd(projectId?: string) {
 
   const provider = await vscode.window.showQuickPick(
     [
-      { label: "Gemini", value: "gemini" },
-      { label: "OpenAI", value: "openai" },
+      { label: "Gemini", description: "Google AI", value: "gemini" },
+      { label: "OpenAI", description: "OpenAI API", value: "openai" },
     ],
-    { title: "AI Provider" },
+    { title: "Run Session — AI Provider", placeHolder: "Choose the AI provider" },
   );
   if (!provider) {
     return;
   }
 
   const model = await vscode.window.showInputBox({
-    title: "Model",
+    title: "Run Session — Model",
+    prompt: `Enter the model name for ${provider.label}`,
+    placeHolder: "e.g. gemini-2.0-flash or gpt-4o",
     value: provider.value === "gemini" ? "gemini-2.0-flash" : "gpt-4o",
   });
   if (!model) {
@@ -33,7 +35,7 @@ export async function runSessionCmd(projectId?: string) {
       { label: "Vue", value: "vue" },
       { label: "Angular", value: "angular" },
     ],
-    { title: "Framework" },
+    { title: "Run Session — Framework", placeHolder: "Choose the frontend framework" },
   );
 
   const css = await vscode.window.showQuickPick(
@@ -42,13 +44,13 @@ export async function runSessionCmd(projectId?: string) {
       { label: "CSS Modules", value: "css-modules" },
       { label: "Styled Components", value: "styled-components" },
     ],
-    { title: "CSS Strategy" },
+    { title: "Run Session — CSS Strategy", placeHolder: "Choose how styles are applied" },
   );
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "Running generation session...",
+      title: "Run Session — Running generation...",
     },
     async () => {
       try {
@@ -59,12 +61,40 @@ export async function runSessionCmd(projectId?: string) {
           cssStrategy: css?.value,
         });
         vscode.window.showInformationMessage(
-          `Session started! Status: ${session.status}`,
+          `Session started. Status: ${session.status}`,
         );
         vscode.commands.executeCommand("uigenai.refreshSidebar");
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
+        const errMsg = extractApiError(e);
+
+        // If the error indicates missing inferrable documents, offer recovery
+        if (isMissingDocError(errMsg)) {
+          const action = await vscode.window.showWarningMessage(
+            `${errMsg}\n\nWould you like to infer the missing documents from a local folder?`,
+            "Infer from Folder",
+            "Cancel",
+          );
+          if (action === "Infer from Folder") {
+            vscode.commands.executeCommand(
+              "uigenai.inferFromFolder",
+              projectId,
+            );
+          }
+        } else {
+          vscode.window.showErrorMessage(`Failed: ${errMsg}`);
+        }
       }
     },
+  );
+}
+
+/** Check if the error message indicates missing OPENAPI or ENTITY_SCHEMA */
+function isMissingDocError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    (lower.includes("missing") || lower.includes("required")) &&
+    (lower.includes("document") ||
+      lower.includes("openapi") ||
+      lower.includes("entity"))
   );
 }

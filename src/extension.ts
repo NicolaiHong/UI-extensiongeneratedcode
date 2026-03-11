@@ -6,9 +6,12 @@ import { initApiClient, getServerUrl } from "./api/client";
 import { createProjectCmd } from "./commands/projectCommands";
 import { createApiCmd } from "./commands/apiCommands";
 import { uploadDocumentCmd } from "./commands/documentCommands";
+import { inferFromFolderCmd } from "./commands/inferCommands";
 import { runSessionCmd } from "./commands/sessionCommands";
 import { createDeploymentCmd } from "./commands/deploymentCommands";
 import { generateCmd } from "./commands/generateCommand";
+import { directGenerateCmd } from "./commands/directGenerateCommand";
+import { advancedGenerateCmd } from "./commands/advancedGenerateCommand";
 
 let auth: AuthManager;
 
@@ -99,8 +102,13 @@ export async function activate(context: vscode.ExtensionContext) {
   reg("uigenai.uploadDocument", (projectId?: string) =>
     uploadDocumentCmd(projectId),
   );
+  reg("uigenai.inferFromFolder", (projectId?: string) =>
+    inferFromFolderCmd(projectId),
+  );
   reg("uigenai.runSession", (projectId?: string) => runSessionCmd(projectId));
   reg("uigenai.createDeployment", () => createDeploymentCmd());
+  reg("uigenai.directGenerate", () => directGenerateCmd(context));
+  reg("uigenai.advancedGenerate", () => advancedGenerateCmd(context));
   reg("uigenai.refreshSidebar", () => dashboardProvider.refresh());
 }
 

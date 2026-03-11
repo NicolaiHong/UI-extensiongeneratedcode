@@ -16,8 +16,8 @@ export async function uploadDocumentCmd(projectId?: string) {
   }
 
   const typePick = await vscode.window.showQuickPick(DOC_TYPES, {
-    title: "Document Type",
-    placeHolder: "Select document type",
+    title: "Upload Document — Document Type",
+    placeHolder: "What type of document are you uploading?",
   });
   if (!typePick) {
     return;
@@ -26,11 +26,11 @@ export async function uploadDocumentCmd(projectId?: string) {
   // Option: paste content or pick file
   const source = await vscode.window.showQuickPick(
     [
-      { label: "📄 From current editor", value: "editor" },
-      { label: "📁 From file", value: "file" },
-      { label: "✏️ Paste content", value: "paste" },
+      { label: "From current editor", value: "editor" },
+      { label: "From file", value: "file" },
+      { label: "Paste content", value: "paste" },
     ],
-    { title: "Content Source" },
+    { title: "Upload Document — Content Source", placeHolder: "Where is the content?" },
   );
   if (!source) {
     return;
@@ -60,8 +60,8 @@ export async function uploadDocumentCmd(projectId?: string) {
     name = files[0].path.split("/").pop() || name;
   } else {
     const pasted = await vscode.window.showInputBox({
-      title: "Paste content",
-      prompt: "Paste document content (JSON/YAML)",
+      title: "Upload Document — Paste Content",
+      prompt: "Paste document content (JSON / YAML / text)",
       ignoreFocusOut: true,
     });
     if (!pasted) {
@@ -73,7 +73,7 @@ export async function uploadDocumentCmd(projectId?: string) {
   try {
     await documentsApi.upsert(projectId, typePick.value, { name, content });
     vscode.window.showInformationMessage(
-      `Document "${typePick.label}" uploaded!`,
+      `Document "${typePick.label}" uploaded successfully.`,
     );
     vscode.commands.executeCommand("uigenai.refreshSidebar");
   } catch (e: unknown) {
