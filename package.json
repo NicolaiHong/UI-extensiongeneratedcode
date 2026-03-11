@@ -58,6 +58,16 @@
         "title": "UI Gen AI: Create Deployment"
       },
       {
+        "command": "uigenai.directGenerate",
+        "title": "UI Gen: Direct Generate (from OpenAPI)",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "uigenai.advancedGenerate",
+        "title": "UI Gen: Advanced Generate (Infer + Session)",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "uigenai.refreshSidebar",
         "title": "Refresh",
         "icon": "$(refresh)"
