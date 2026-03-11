@@ -4,16 +4,17 @@ import { extractApiError } from "../utils/errors";
 
 export async function createProjectCmd() {
   const name = await vscode.window.showInputBox({
-    title: "Create Project",
-    prompt: "Project name",
+    title: "Create Project — Name",
+    prompt: "Enter a name for the new project",
     placeHolder: "My Awesome App",
+    validateInput: (v) => (v.trim() ? null : "Project name is required"),
   });
-  if (!name) {
+  if (!name?.trim()) {
     return;
   }
   const desc = await vscode.window.showInputBox({
-    title: "Create Project",
-    prompt: "Description (optional)",
+    title: "Create Project — Description",
+    prompt: "A short description (optional)",
     placeHolder: "An AI-powered app",
   });
   try {
@@ -21,7 +22,7 @@ export async function createProjectCmd() {
       name,
       description: desc || undefined,
     });
-    vscode.window.showInformationMessage(`Project "${p.name}" created!`);
+    vscode.window.showInformationMessage(`Project "${p.name}" created.`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
   } catch (e: unknown) {
     vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
@@ -31,24 +32,25 @@ export async function createProjectCmd() {
 export async function editProjectCmd(projectId: string) {
   const p = await projectsApi.getById(projectId);
   const name = await vscode.window.showInputBox({
-    title: "Edit Project",
+    title: "Edit Project — Name",
     value: p.name,
-    prompt: "Project name",
+    prompt: "Update the project name",
+    validateInput: (v) => (v.trim() ? null : "Project name is required"),
   });
   if (!name) {
     return;
   }
   const desc = await vscode.window.showInputBox({
-    title: "Edit Project",
+    title: "Edit Project — Description",
     value: p.description || "",
-    prompt: "Description",
+    prompt: "Update the description (optional)",
   });
   try {
     await projectsApi.update(projectId, {
       name,
       description: desc || undefined,
     });
-    vscode.window.showInformationMessage(`Project updated!`);
+    vscode.window.showInformationMessage(`Project updated.`);
     vscode.commands.executeCommand("uigenai.refreshSidebar");
   } catch (e: unknown) {
     vscode.window.showErrorMessage(`Failed: ${extractApiError(e)}`);
@@ -57,7 +59,7 @@ export async function editProjectCmd(projectId: string) {
 
 export async function deleteProjectCmd(projectId: string, projectName: string) {
   const confirm = await vscode.window.showWarningMessage(
-    `Delete project "${projectName}"?`,
+    `Delete project "${projectName}"? This action cannot be undone.`,
     { modal: true },
     "Delete",
   );

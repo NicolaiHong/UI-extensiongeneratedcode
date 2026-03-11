@@ -4,11 +4,11 @@
  */
 
 export const FRAMEWORKS = [
-  { label: "React", value: "React 18+ with TypeScript", sessionValue: "react" as const },
-  { label: "Vue.js", value: "Vue 3 with Composition API and TypeScript", sessionValue: "vue" as const },
-  { label: "Angular", value: "Angular 17+ with TypeScript", sessionValue: "angular" as const },
-  { label: "Svelte", value: "SvelteKit with TypeScript", sessionValue: "react" as const },
-  { label: "Next.js", value: "Next.js 14+ App Router with TypeScript", sessionValue: "react" as const },
+  { label: "React", value: "React 18+ with TypeScript", description: "Component-based SPA", sessionValue: "react" as const },
+  { label: "Vue.js", value: "Vue 3 with Composition API and TypeScript", description: "Progressive framework", sessionValue: "vue" as const },
+  { label: "Angular", value: "Angular 17+ with TypeScript", description: "Full-featured platform", sessionValue: "angular" as const },
+  { label: "Svelte", value: "SvelteKit with TypeScript", description: "Compiler-based framework", sessionValue: "react" as const },
+  { label: "Next.js", value: "Next.js 14+ App Router with TypeScript", description: "React meta-framework", sessionValue: "react" as const },
 ] as const;
 
 export const DESIGN_SYSTEMS = [
@@ -87,8 +87,8 @@ export const DESIGN_SYSTEMS = [
 ] as const;
 
 export const AI_PROVIDERS = [
-  { label: "Gemini", value: "gemini" as const },
-  { label: "OpenAI", value: "openai" as const },
+  { label: "Gemini", value: "gemini" as const, description: "Google AI" },
+  { label: "OpenAI", value: "openai" as const, description: "OpenAI API" },
 ] as const;
 
 /**

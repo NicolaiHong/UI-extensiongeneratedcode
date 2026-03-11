@@ -17,29 +17,23 @@
   "contributes": {
     "commands": [
       {
-        "command": "uigenai.login",
-        "title": "UI Gen AI: Login / Register"
+        "command": "uigenai.directGenerate",
+        "title": "UI Gen AI: Generate from Swagger / OpenAPI",
+        "icon": "$(zap)"
       },
       {
-        "command": "uigenai.logout",
-        "title": "UI Gen AI: Logout"
+        "command": "uigenai.advancedGenerate",
+        "title": "UI Gen AI: Generate from Source Folder",
+        "icon": "$(beaker)"
       },
       {
         "command": "uigenai.generate",
-        "title": "UI Gen AI: Generate Code",
+        "title": "UI Gen AI: Quick Generate (Prompt Only)",
         "icon": "$(sparkle)"
-      },
-      {
-        "command": "uigenai.setServer",
-        "title": "UI Gen AI: Set Server URL"
       },
       {
         "command": "uigenai.createProject",
         "title": "UI Gen AI: Create Project"
-      },
-      {
-        "command": "uigenai.createApi",
-        "title": "UI Gen AI: Create API"
       },
       {
         "command": "uigenai.uploadDocument",
@@ -54,18 +48,24 @@
         "title": "UI Gen AI: Run Generation Session"
       },
       {
+        "command": "uigenai.createApi",
+        "title": "UI Gen AI: Create API"
+      },
+      {
         "command": "uigenai.createDeployment",
         "title": "UI Gen AI: Create Deployment"
       },
       {
-        "command": "uigenai.directGenerate",
-        "title": "UI Gen: Direct Generate (from OpenAPI)",
-        "icon": "$(zap)"
+        "command": "uigenai.login",
+        "title": "UI Gen AI: Login / Register"
       },
       {
-        "command": "uigenai.advancedGenerate",
-        "title": "UI Gen: Advanced Generate (Infer + Session)",
-        "icon": "$(beaker)"
+        "command": "uigenai.logout",
+        "title": "UI Gen AI: Logout"
+      },
+      {
+        "command": "uigenai.setServer",
+        "title": "UI Gen AI: Set Server URL"
       },
       {
         "command": "uigenai.refreshSidebar",

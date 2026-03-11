@@ -25,7 +25,7 @@ export async function inferFromFolderCmd(projectId?: string) {
     canSelectFolders: true,
     canSelectMany: false,
     openLabel: "Scan Folder",
-    title: "Select backend project folder to infer API & entities from",
+    title: "Infer API & Entities — Select Backend Source Folder",
   });
   if (!folders || folders.length === 0) {
     return;
@@ -38,7 +38,7 @@ export async function inferFromFolderCmd(projectId?: string) {
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "Inferring OPENAPI & ENTITY_SCHEMA…",
+      title: "Infer API & Entities — Scanning source folder...",
       cancellable: false,
     },
     async () => {
@@ -89,7 +89,7 @@ async function offerDocument(projectId: string, doc: InferredDocument) {
   const sources = doc.sourceFiles.length;
 
   const action = await vscode.window.showInformationMessage(
-    `Inferred ${doc.type} (${pct} confidence, ${method}, ${sources} source files). Accept and upload?`,
+    `${doc.type} — ${pct} confidence (${method}, ${sources} source file${sources !== 1 ? "s" : ""}). Accept and upload?`,
     { modal: false },
     "Accept",
     "Preview",

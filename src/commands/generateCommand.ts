@@ -28,22 +28,22 @@ const DESIGN_SYSTEMS = [
 ];
 
 export async function generateCmd() {
-  // ── 1. Prompt source ──
+  //   Prompt source
   const promptSource = await vscode.window.showQuickPick(
     [
       {
-        label: "✍️  Custom Prompt",
+        label: "Custom Prompt",
         description: "Enter your own prompt",
         value: "custom",
       },
       {
-        label: "📋  Pre-built Template",
+        label: "Pre-built Template",
         description: "Fetch prompt templates from backend",
         value: "template",
       },
     ],
     {
-      title: "UI Gen AI — Prompt Source",
+      title: "Quick Generate — Prompt Source",
       placeHolder: "How do you want to provide the prompt?",
     },
   );
@@ -57,7 +57,7 @@ export async function generateCmd() {
     const editor = vscode.window.activeTextEditor;
     const selected = editor?.document.getText(editor.selection);
     prompt = await vscode.window.showInputBox({
-      title: "UI Gen AI — Custom Prompt",
+      title: "Quick Generate — Custom Prompt",
       prompt: "Describe the UI you want to generate",
       placeHolder:
         "e.g. Create a user management dashboard with table, search, and CRUD",
@@ -70,7 +70,7 @@ export async function generateCmd() {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Fetching prompt templates...",
+        title: "Quick Generate — Loading templates...",
       },
       async () => {
         try {
@@ -96,7 +96,7 @@ export async function generateCmd() {
         value: t.prompt,
       })),
       {
-        title: "UI Gen AI — Select Template",
+        title: "Quick Generate — Select Template",
         placeHolder: "Choose a pre-built prompt template",
         matchOnDetail: true,
       },
@@ -107,7 +107,7 @@ export async function generateCmd() {
 
     // Allow user to optionally edit the template prompt
     prompt = await vscode.window.showInputBox({
-      title: "UI Gen AI — Edit Template Prompt (optional)",
+      title: "Quick Generate — Edit Template (optional)",
       prompt:
         "You can customize the template prompt or press Enter to use as-is",
       value: picked.value,
@@ -119,39 +119,41 @@ export async function generateCmd() {
     return;
   }
 
-  // ── 2. Framework selection ──
+  //  Framework selection 
   const framework = await vscode.window.showQuickPick(
     FRAMEWORKS.map((f) => ({ label: f.label, value: f.value })),
-    { title: "Framework", placeHolder: "Select the frontend framework" },
+    { title: "Quick Generate — Framework", placeHolder: "Select the frontend framework" },
   );
   if (!framework) {
     return;
   }
 
-  // ── 3. Design System selection ──
+  //  Design System selection 
   const designSystem = await vscode.window.showQuickPick(
     DESIGN_SYSTEMS.map((d) => ({ label: d.label, value: d.value })),
-    { title: "Design System / CSS", placeHolder: "Select the design system" },
+    { title: "Quick Generate — Design System", placeHolder: "Select the design system or CSS strategy" },
   );
   if (!designSystem) {
     return;
   }
 
-  // ── 4. AI Provider + Model ──
+  // AI Provider + Model 
   const cfg = vscode.workspace.getConfiguration("uigenai");
   const provider = await vscode.window.showQuickPick(
     [
-      { label: "Gemini", value: "gemini" },
-      { label: "OpenAI", value: "openai" },
+      { label: "Gemini", description: "Google AI", value: "gemini" },
+      { label: "OpenAI", description: "OpenAI API", value: "openai" },
     ],
-    { title: "AI Provider" },
+    { title: "Quick Generate — AI Provider", placeHolder: "Choose the AI provider" },
   );
   if (!provider) {
     return;
   }
 
   const model = await vscode.window.showInputBox({
-    title: "Model",
+    title: "Quick Generate — Model",
+    prompt: `Enter the model name for ${provider.label}`,
+    placeHolder: "e.g. gemini-2.0-flash or gpt-4o",
     value:
       provider.value === "gemini"
         ? cfg.get("defaultModel", "gemini-2.0-flash")
@@ -161,14 +163,14 @@ export async function generateCmd() {
     return;
   }
 
-  // ── 5. Optional: link to an API ──
+  //  Optional: link to an API 
   let apiId: string | undefined;
   const linkApi = await vscode.window.showQuickPick(
     [
       { label: "No, just generate", value: "no" },
       { label: "Yes, save to an API", value: "yes" },
     ],
-    { title: "Save generated code to an API?" },
+    { title: "Quick Generate — Link to API?", placeHolder: "Save generated code to an existing API record" },
   );
   if (linkApi?.value === "yes") {
     try {
@@ -180,7 +182,7 @@ export async function generateCmd() {
             description: a.base_url || "",
             value: a.id,
           })),
-          { title: "Select API" },
+          { title: "Quick Generate — Select API", placeHolder: "Choose an API to link" },
         );
         apiId = pick?.value;
       } else {
@@ -193,7 +195,7 @@ export async function generateCmd() {
     }
   }
 
-  // ── 6. Build final prompt with framework + design system ──
+  //  Build final prompt with framework + design system 
   const extras: string[] = [];
   extras.push(`**Framework**: ${framework.value}`);
   if (designSystem.value) {
@@ -205,7 +207,7 @@ export async function generateCmd() {
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "🤖 Generating code...",
+      title: "Quick Generate — Generating code...",
     },
     async () => {
       try {
@@ -239,7 +241,7 @@ export async function generateCmd() {
 function showPreview(result: GenerateResult, prompt: string) {
   const panel = vscode.window.createWebviewPanel(
     "uigenai-preview",
-    "⚡ Generated Code",
+    "Generated Code",
     vscode.ViewColumn.One,
     { enableScripts: true },
   );
@@ -314,14 +316,14 @@ function showPreview(result: GenerateResult, prompt: string) {
 .size-bar label{font-size:11px;color:rgba(255,255,255,.4)}
 .size-bar button{padding:3px 8px;font-size:10px}
 </style></head><body>
-<div class="done" id="done">✅ Files applied to workspace!</div>
-<div class="hd"><div class="hd-top"><h2>⚡ Generated Code<span class="badge" id="cnt"></span></h2>
-<button class="btn bp" onclick="applyAll()" id="ab">📁 Apply All</button></div>
-<div class="prompt">💬 ${escapeHtml(prompt)}</div></div>
+<div class="done" id="done">Files applied to workspace</div>
+<div class="hd"><div class="hd-top"><h2>Generated Code<span class="badge" id="cnt"></span></h2>
+<button class="btn bp" onclick="applyAll()" id="ab">Apply All</button></div>
+<div class="prompt">${escapeHtml(prompt)}</div></div>
 ${result.summary ? `<div class="sm">${escapeHtml(result.summary)}</div>` : ""}
 <div class="main-tabs">
-<button class="main-tab active" onclick="switchTab('code')">📄 Code</button>
-<button class="main-tab" onclick="switchTab('preview')">👁️ Live Preview</button>
+<button class="main-tab active" onclick="switchTab('code')">Code</button>
+<button class="main-tab" onclick="switchTab('preview')">Live Preview</button>
 </div>
 <div class="tab-panel active" id="tab-code">
 <div class="fl" id="fl"></div>
@@ -330,9 +332,9 @@ ${result.summary ? `<div class="sm">${escapeHtml(result.summary)}</div>` : ""}
 <div class="preview-container">
 <div class="size-bar">
 <label>Viewport:</label>
-<button class="btn bs" onclick="setSize(375,667)">📱 Mobile</button>
-<button class="btn bs" onclick="setSize(768,600)">📟 Tablet</button>
-<button class="btn bs active-view" onclick="setSize('100%',500)">🖥️ Desktop</button>
+<button class="btn bs" onclick="setSize(375,667)">Mobile</button>
+<button class="btn bs" onclick="setSize(768,600)">Tablet</button>
+<button class="btn bs active-view" onclick="setSize('100%',500)">Desktop</button>
 </div>
 <div class="preview-toolbar" id="preview-toolbar"></div>
 <div class="preview-frame" id="preview-frame">
@@ -354,7 +356,7 @@ function switchTab(t){
 
 /* ---- Code tab ---- */
 const fl=document.getElementById('fl');
-files.forEach((f,i)=>{const d=document.createElement('div');d.className='fi';d.innerHTML=\`<div class="fh" onclick="tog(\${i})"><div class="fn">📄 \${esc(f.name)}</div><div style="display:flex;align-items:center;gap:10px"><div class="fm">\${f.lang} · \${f.lines} lines</div><div class="fa"><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();cp(\${i})">📋</button><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();af(\${i})">📁</button></div></div></div><div class="cb" id="c\${i}"><pre>\${esc(f.content)}</pre></div>\`;fl.appendChild(d)});
+files.forEach((f,i)=>{const d=document.createElement('div');d.className='fi';d.innerHTML=\`<div class="fh" onclick="tog(\${i})"><div class="fn">\${esc(f.name)}</div><div style="display:flex;align-items:center;gap:10px"><div class="fm">\${f.lang} · \${f.lines} lines</div><div class="fa"><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();cp(\${i})" title="Copy">Copy</button><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();af(\${i})" title="Apply">Apply</button></div></div></div><div class="cb" id="c\${i}"><pre>\${esc(f.content)}</pre></div>\`;fl.appendChild(d)});
 
 function tog(i){document.getElementById('c'+i).classList.toggle('open')}
 function applyAll(){vscode.postMessage({type:'applyAll'})}
@@ -374,14 +376,14 @@ function buildPreviewToolbar(){
   const pFiles=files.filter(f=>isPreviewable(f.name));
   if(pFiles.length===0){
     // try to render all files combined
-    tb.innerHTML='<button class="btn bs active-view" onclick="renderAll()">🔄 Render All Files</button>';
+    tb.innerHTML='<button class="btn bs active-view" onclick="renderAll()">Render All Files</button>';
     renderAll();
     return;
   }
   pFiles.forEach((f,idx)=>{
     const b=document.createElement('button');
     b.className='btn bs';
-    b.textContent='👁️ '+f.name;
+    b.textContent=f.name;
     b.onclick=()=>{
       tb.querySelectorAll('.btn').forEach(x=>x.classList.remove('active-view'));
       b.classList.add('active-view');
@@ -391,7 +393,7 @@ function buildPreviewToolbar(){
   });
   // Also add "Render All" button
   const ba=document.createElement('button');
-  ba.className='btn bs';ba.textContent='🔄 All Combined';
+  ba.className='btn bs';ba.textContent='All Combined';
   ba.onclick=()=>{
     tb.querySelectorAll('.btn').forEach(x=>x.classList.remove('active-view'));
     ba.classList.add('active-view');
@@ -488,7 +490,7 @@ function setSize(w,h){
   event.target.classList.add('active-view');
 }
 
-window.addEventListener('message',e=>{if(e.data.type==='applied'){document.getElementById('done').classList.add('show');const b=document.getElementById('ab');b.disabled=true;b.textContent='✅ Applied!'}})
+window.addEventListener('message',e=>{if(e.data.type==='applied'){document.getElementById('done').classList.add('show');const b=document.getElementById('ab');b.disabled=true;b.textContent='Applied'}})
 </script></body></html>`;
 }
 
@@ -499,7 +501,7 @@ async function applyFiles(changes: GenerateChange[]) {
     const f = await vscode.window.showOpenDialog({
       canSelectFolders: true,
       canSelectFiles: false,
-      title: "Select target folder",
+      title: "Quick Generate — Select Target Folder",
     });
     if (!f?.length) {
       return;
@@ -528,7 +530,7 @@ async function applyFiles(changes: GenerateChange[]) {
     );
     n++;
   }
-  vscode.window.showInformationMessage(`✅ ${n} file(s) written!`);
+  vscode.window.showInformationMessage(`${n} file(s) written to workspace.`);
   if (changes[0]) {
     try {
       const doc = await vscode.workspace.openTextDocument(
