@@ -1,5 +1,3 @@
-
-
 import * as vscode from "vscode";
 import { documentsApi } from "../api/documents.api";
 import { sessionsApi } from "../api/sessions.api";
@@ -18,13 +16,13 @@ import {
   type InferenceResult,
 } from "../inference";
 
-const FLOW_NAME = "Generate from Source";
+const FLOW_NAME = "From Source";
 
 export async function advancedGenerateCmd(
   _context: vscode.ExtensionContext,
 ): Promise<void> {
   // ── 1. Pick project ──
-  const project = await pickProject(`${FLOW_NAME} — Step 1/7: Select Project`);
+  const project = await pickProject(`${FLOW_NAME} \u2014 Step 1 of 7: Select Project`);
   if (!project) {
     return;
   }
@@ -35,7 +33,7 @@ export async function advancedGenerateCmd(
     canSelectFolders: true,
     canSelectMany: false,
     openLabel: "Select Folder",
-    title: `${FLOW_NAME} — Step 2/7: Select Backend Source Folder`,
+    title: `${FLOW_NAME} \u2014 Step 2 of 7: Select Backend Source Folder`,
   });
   if (!folders?.length) {
     return;
@@ -78,12 +76,15 @@ export async function advancedGenerateCmd(
     if (action === "Try Different Folder") {
       await vscode.commands.executeCommand("uigenai.advancedGenerate");
     } else if (action === "Upload Manually") {
-      await vscode.commands.executeCommand("uigenai.uploadDocument", project.id);
+      await vscode.commands.executeCommand(
+        "uigenai.uploadDocument",
+        project.id,
+      );
     }
     return;
   }
 
-  //  4. Review + accept each inferred doc 
+  //  4. Review + accept each inferred doc
   const accepted: Map<string, InferredDocument> = new Map();
   for (const doc of inferenceResult.inferred) {
     const wasAccepted = await offerDocument(doc);
@@ -99,7 +100,10 @@ export async function advancedGenerateCmd(
       "Cancel",
     );
     if (action === "Upload Document") {
-      await vscode.commands.executeCommand("uigenai.uploadDocument", project.id);
+      await vscode.commands.executeCommand(
+        "uigenai.uploadDocument",
+        project.id,
+      );
     }
     return;
   }
@@ -112,7 +116,7 @@ export async function advancedGenerateCmd(
     vscode.window.showWarningMessage(`Skipped: ${skippedMsg}`);
   }
 
-  //Collect ACTION_SPEC — user prompt 
+  //Collect ACTION_SPEC — user prompt
   const prompt = await vscode.window.showInputBox({
     title: `${FLOW_NAME} — Step 5/7: Describe What to Generate`,
     prompt: "This becomes the ACTION_SPEC sent to the AI",
@@ -124,25 +128,29 @@ export async function advancedGenerateCmd(
     return;
   }
 
-  // Design system preset 
-  const design = await pickDesignSystem(`${FLOW_NAME} — Step 6/7: Design System`);
+  // Design system preset
+  const design = await pickDesignSystem(
+    `${FLOW_NAME} — Step 6/7: Design System`,
+  );
   if (!design) {
     return;
   }
 
-  //  Framework 
+  //  Framework
   const framework = await pickFramework(`${FLOW_NAME} — Step 6/7: Framework`);
   if (!framework) {
     return;
   }
 
   //  AI Provider + Model
-  const providerModel = await pickProviderAndModel(`${FLOW_NAME} — Step 7/7: AI Provider`);
+  const providerModel = await pickProviderAndModel(
+    `${FLOW_NAME} — Step 7/7: AI Provider`,
+  );
   if (!providerModel) {
     return;
   }
 
-  //Pre-flight confirmation 
+  //Pre-flight confirmation
   const acceptedTypes = Array.from(accepted.keys()).join(", ");
   const confirmed = await confirmGeneration([
     `Project: ${project.name}`,
@@ -154,7 +162,7 @@ export async function advancedGenerateCmd(
     return;
   }
 
-  // Upload all documents + run session 
+  // Upload all documents + run session
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -179,7 +187,9 @@ export async function advancedGenerateCmd(
 
         // Upload ENTITY_SCHEMA (from inference or skip)
         if (accepted.has("ENTITY_SCHEMA")) {
-          progress.report({ message: "[2/5] Uploading inferred Entity Schema..." });
+          progress.report({
+            message: "[2/5] Uploading inferred Entity Schema...",
+          });
           await documentsApi.upsert(project.id, "ENTITY_SCHEMA", {
             name: "[inferred] ENTITY_SCHEMA",
             content: accepted.get("ENTITY_SCHEMA")!.content,
@@ -234,7 +244,7 @@ export async function advancedGenerateCmd(
   vscode.commands.executeCommand("uigenai.refreshSidebar");
 }
 
-//  Offer a single inferred document to the user (inline review) 
+//  Offer a single inferred document to the user (inline review)
 
 async function offerDocument(doc: InferredDocument): Promise<boolean> {
   const pct = `${(doc.confidence.score * 100).toFixed(0)}%`;
@@ -267,7 +277,7 @@ async function offerDocument(doc: InferredDocument): Promise<boolean> {
   return action === "Accept";
 }
 
-// Polling helper 
+// Polling helper
 
 interface SessionStatus {
   id: string;

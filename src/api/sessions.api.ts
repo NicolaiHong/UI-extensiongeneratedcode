@@ -31,4 +31,8 @@ export const sessionsApi = {
     unwrap(
       await getApi().post(`/api/projects/${projectId}/sessions/run`, data),
     ),
+
+  delete: async (projectId: string, id: string): Promise<void> => {
+    await getApi().delete(`/api/projects/${projectId}/sessions/${id}`);
+  },
 };
