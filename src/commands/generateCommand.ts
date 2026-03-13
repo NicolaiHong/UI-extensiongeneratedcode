@@ -27,6 +27,347 @@ const DESIGN_SYSTEMS = [
   { label: "None", value: "" },
 ];
 
+interface GeneratedFile {
+  path: string;
+  content: string;
+  lang: string;
+  lines: number;
+}
+
+interface ApplyFilesResult {
+  root: vscode.Uri;
+  written: GeneratedFile[];
+  failures: Array<{ path: string; error: string }>;
+}
+
+function logGeneratePreview(message: string, data?: unknown) {
+  if (data === undefined) {
+    console.log(`[uigenai][generate-preview] ${message}`);
+    return;
+  }
+  console.log(`[uigenai][generate-preview] ${message}`, data);
+}
+
+function resolveChanges(result: GenerateResult): GenerateChange[] {
+  if (Array.isArray(result?.changes) && result.changes.length > 0) {
+    return result.changes;
+  }
+
+  // Backend may have returned a wrapped payload: { success, data: { changes, summary } }
+  const inner = (result as unknown as Record<string, unknown>)?.data;
+  if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+    const wrapped = inner as Record<string, unknown>;
+    if (Array.isArray(wrapped.changes)) {
+      return wrapped.changes as GenerateChange[];
+    }
+  }
+
+  return [];
+}
+
+function resolveSummary(result: GenerateResult): string {
+  if (typeof result?.summary === "string" && result.summary) {
+    return result.summary;
+  }
+
+  const inner = (result as unknown as Record<string, unknown>)?.data;
+  if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+    const wrapped = inner as Record<string, unknown>;
+    if (typeof wrapped.summary === "string") {
+      return wrapped.summary;
+    }
+  }
+
+  return "";
+}
+
+function normalizeGeneratedFiles(result: GenerateResult): GeneratedFile[] {
+  const rawChanges = resolveChanges(result);
+
+  logGeneratePreview("Generation response shape", {
+    success: result?.success,
+    summaryType: typeof result?.summary,
+    changeCount: rawChanges.length,
+    changes: rawChanges.map((change, index) => ({
+      index,
+      fileName: typeof change?.fileName === "string" ? change.fileName : null,
+      codeContentType: typeof change?.codeContent,
+      codeContentLength:
+        typeof change?.codeContent === "string"
+          ? change.codeContent.length
+          : null,
+      codeContentPreview:
+        typeof change?.codeContent === "string"
+          ? change.codeContent.slice(0, 200)
+          : null,
+    })),
+  });
+
+  const normalized: GeneratedFile[] = [];
+  const seen = new Set<string>();
+
+  for (const change of rawChanges) {
+    const extracted = extractGeneratedFilesFromUnknown(change?.codeContent);
+    if (extracted.length > 0) {
+      for (const file of extracted) {
+        if (!seen.has(file.path)) {
+          normalized.push(file);
+          seen.add(file.path);
+        }
+      }
+      continue;
+    }
+
+    // Fallback: treat fileName
+    const direct = toGeneratedFile(change?.fileName, change?.codeContent);
+    if (direct && !seen.has(direct.path)) {
+      normalized.push(direct);
+      seen.add(direct.path);
+    }
+  }
+
+  logGeneratePreview("Parsed files", {
+    count: normalized.length,
+    files: normalized.map((file) => ({
+      path: file.path,
+      lang: file.lang,
+      lines: file.lines,
+    })),
+  });
+
+  return normalized;
+}
+
+function extractGeneratedFilesFromUnknown(
+  value: unknown,
+  depth = 0,
+): GeneratedFile[] {
+  if (depth > 4 || value == null) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    return extractGeneratedFilesFromString(value, depth + 1);
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) =>
+      extractGeneratedFilesFromUnknown(item, depth + 1),
+    );
+  }
+
+  if (typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const direct = toGeneratedFile(
+    firstString(record, [
+      "fileName",
+      "filename",
+      "file_path",
+      "filePath",
+      "path",
+      "name",
+    ]),
+    firstString(record, ["codeContent", "content", "code", "value", "source"]),
+  );
+  if (direct) {
+    return [direct];
+  }
+
+  for (const key of [
+    "files",
+    "changes",
+    "generatedFiles",
+    "output",
+    "data",
+    "items",
+  ]) {
+    const nested = extractGeneratedFilesFromUnknown(record[key], depth + 1);
+    if (nested.length > 0) {
+      return nested;
+    }
+  }
+
+  const entries = Object.entries(record);
+  const mapped = entries
+    .map(([key, content]) => toGeneratedFile(key, content))
+    .filter((file): file is GeneratedFile => Boolean(file));
+
+  if (mapped.length > 0 && mapped.length === entries.length) {
+    return mapped;
+  }
+
+  return [];
+}
+
+function extractGeneratedFilesFromString(
+  value: string,
+  depth: number,
+): GeneratedFile[] {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const candidates = [trimmed, stripCodeFence(trimmed)];
+
+  for (const candidate of candidates) {
+    if (!looksLikeStructuredPayload(candidate)) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(candidate);
+      const nested = extractGeneratedFilesFromUnknown(parsed, depth + 1);
+      if (nested.length > 0) {
+        return nested;
+      }
+    } catch {
+      // Ignore and keep trying other candidate forms.
+    }
+  }
+
+  return [];
+}
+
+function stripCodeFence(value: string): string {
+  const fenced = value.match(
+    /^```(?:json|javascript|js)?\s*([\s\S]*?)\s*```$/i,
+  );
+  return fenced ? fenced[1].trim() : value;
+}
+
+function looksLikeStructuredPayload(value: string): boolean {
+  if (
+    !(value.startsWith("{") || value.startsWith("[") || value.startsWith('"'))
+  ) {
+    return false;
+  }
+
+  return /(fileName|codeContent|file_path|filePath|generatedFiles|changes|files)/i.test(
+    value,
+  );
+}
+
+/**
+ * Detect whether a summary string is actually a serialized payload
+ * (raw JSON, code fences, etc.) rather than a human-readable summary.
+ * When true the summary should be suppressed in the preview UI because
+ * the parsed GeneratedFile[] is already the source of truth.
+ */
+function looksLikeSerializedPayload(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (
+    (trimmed.startsWith("{") || trimmed.startsWith("[")) &&
+    /(fileName|codeContent|file_path|filePath|generatedFiles)/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  if (/^```/m.test(trimmed) && trimmed.length > 500) {
+    return true;
+  }
+
+  return false;
+}
+
+function firstString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    if (typeof record[key] === "string") {
+      return record[key] as string;
+    }
+  }
+  return undefined;
+}
+
+function toGeneratedFile(
+  filePath: unknown,
+  content: unknown,
+): GeneratedFile | undefined {
+  if (typeof filePath !== "string" || typeof content !== "string") {
+    return undefined;
+  }
+
+  const normalizedPath = sanitizeGeneratedPath(filePath);
+  if (!normalizedPath) {
+    return undefined;
+  }
+
+  return {
+    path: normalizedPath,
+    content,
+    lang: path.extname(normalizedPath).replace(".", "").toUpperCase() || "FILE",
+    lines: content.split("\n").length,
+  };
+}
+
+function sanitizeGeneratedPath(filePath: string): string | undefined {
+  const normalized = path.posix
+    .normalize(
+      filePath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/^\.\//, ""),
+    )
+    .replace(/^\/+/, "");
+
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function getCurrentWorkspaceRoot(): vscode.Uri | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) {
+    return undefined;
+  }
+
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeUri) {
+    const currentFolder = vscode.workspace.getWorkspaceFolder(activeUri);
+    if (currentFolder) {
+      return currentFolder.uri;
+    }
+  }
+
+  return folders[0].uri;
+}
+
+function buildApplyResultMessage(
+  result: ApplyFilesResult,
+  attemptedCount: number,
+): {
+  level: "success" | "error";
+  message: string;
+} {
+  if (result.failures.length === 0) {
+    return {
+      level: "success",
+      message: `Applied ${result.written.length} of ${attemptedCount} file(s) to ${result.root.fsPath}.`,
+    };
+  }
+
+  if (result.written.length === 0) {
+    return {
+      level: "error",
+      message: `Failed to write ${attemptedCount} file(s) to ${result.root.fsPath}: ${result.failures[0].error}`,
+    };
+  }
+
+  return {
+    level: "error",
+    message: `Applied ${result.written.length} of ${attemptedCount} file(s) to ${result.root.fsPath}. ${result.failures.length} failed. First error: ${result.failures[0].error}`,
+  };
+}
+
 export async function generateCmd() {
   //   Prompt source
   const promptSource = await vscode.window.showQuickPick(
@@ -119,32 +460,41 @@ export async function generateCmd() {
     return;
   }
 
-  //  Framework selection 
+  //  Framework selection
   const framework = await vscode.window.showQuickPick(
     FRAMEWORKS.map((f) => ({ label: f.label, value: f.value })),
-    { title: "Quick Generate — Framework", placeHolder: "Select the frontend framework" },
+    {
+      title: "Quick Generate — Framework",
+      placeHolder: "Select the frontend framework",
+    },
   );
   if (!framework) {
     return;
   }
 
-  //  Design System selection 
+  //  Design System selection
   const designSystem = await vscode.window.showQuickPick(
     DESIGN_SYSTEMS.map((d) => ({ label: d.label, value: d.value })),
-    { title: "Quick Generate — Design System", placeHolder: "Select the design system or CSS strategy" },
+    {
+      title: "Quick Generate — Design System",
+      placeHolder: "Select the design system or CSS strategy",
+    },
   );
   if (!designSystem) {
     return;
   }
 
-  // AI Provider + Model 
+  // AI Provider + Model
   const cfg = vscode.workspace.getConfiguration("uigenai");
   const provider = await vscode.window.showQuickPick(
     [
       { label: "Gemini", description: "Google AI", value: "gemini" },
       { label: "OpenAI", description: "OpenAI API", value: "openai" },
     ],
-    { title: "Quick Generate — AI Provider", placeHolder: "Choose the AI provider" },
+    {
+      title: "Quick Generate — AI Provider",
+      placeHolder: "Choose the AI provider",
+    },
   );
   if (!provider) {
     return;
@@ -163,14 +513,17 @@ export async function generateCmd() {
     return;
   }
 
-  //  Optional: link to an API 
+  //  Optional: link to an API
   let apiId: string | undefined;
   const linkApi = await vscode.window.showQuickPick(
     [
       { label: "No, just generate", value: "no" },
       { label: "Yes, save to an API", value: "yes" },
     ],
-    { title: "Quick Generate — Link to API?", placeHolder: "Save generated code to an existing API record" },
+    {
+      title: "Quick Generate — Link to API?",
+      placeHolder: "Save generated code to an existing API record",
+    },
   );
   if (linkApi?.value === "yes") {
     try {
@@ -182,7 +535,10 @@ export async function generateCmd() {
             description: a.base_url || "",
             value: a.id,
           })),
-          { title: "Quick Generate — Select API", placeHolder: "Choose an API to link" },
+          {
+            title: "Quick Generate — Select API",
+            placeHolder: "Choose an API to link",
+          },
         );
         apiId = pick?.value;
       } else {
@@ -195,7 +551,7 @@ export async function generateCmd() {
     }
   }
 
-  //  Build final prompt with framework + design system 
+  //  Build final prompt with framework + design system
   const extras: string[] = [];
   extras.push(`**Framework**: ${framework.value}`);
   if (designSystem.value) {
@@ -225,12 +581,15 @@ export async function generateCmd() {
     },
   );
 
-  if (!result?.success || !result.changes.length) {
-    if (result?.changes?.length === 0) {
-      vscode.window.showWarningMessage(
-        "AI returned no code. Try a more specific prompt.",
-      );
-    }
+  if (!result) {
+    return;
+  }
+
+  const hasChanges = resolveChanges(result).length > 0;
+  if (!hasChanges) {
+    vscode.window.showWarningMessage(
+      "AI returned no code. Try a more specific prompt.",
+    );
     return;
   }
 
@@ -239,6 +598,29 @@ export async function generateCmd() {
 }
 
 function showPreview(result: GenerateResult, prompt: string) {
+  const files = normalizeGeneratedFiles(result);
+  const rawSummary = resolveSummary(result);
+
+  // --- Render-boundary debug ---
+  logGeneratePreview("Render boundary — files", {
+    count: files.length,
+    paths: files.map((f) => f.path),
+    renderMode: files.length > 0 ? "structured" : "empty",
+  });
+  logGeneratePreview("Render boundary — summary", {
+    length: rawSummary.length,
+    looksLikePayload: looksLikeSerializedPayload(rawSummary),
+    preview: rawSummary.slice(0, 200),
+  });
+
+  // If parsed files are available, suppress a summary that is really just the
+  // raw serialized payload text (JSON, code fences, etc.).  Only keep genuine
+  // human-readable summaries.
+  const summary =
+    files.length > 0 && looksLikeSerializedPayload(rawSummary)
+      ? ""
+      : rawSummary;
+
   const panel = vscode.window.createWebviewPanel(
     "uigenai-preview",
     "Generated Code",
@@ -246,38 +628,112 @@ function showPreview(result: GenerateResult, prompt: string) {
     { enableScripts: true },
   );
 
+  if (!files.length) {
+    const message =
+      "Could not parse generated files from the response payload.";
+    logGeneratePreview(message, {
+      summary,
+      rawChanges: resolveChanges(result).length,
+      rawKeys: Object.keys(result ?? {}),
+    });
+    vscode.window.showErrorMessage(message);
+    panel.webview.html = /*html*/ `<!DOCTYPE html><html><body style="font-family:Segoe UI,sans-serif;padding:24px;background:#121416;color:#fff"><h2>Generated Code</h2><p>${escapeHtml(message)}</p></body></html>`;
+    return;
+  }
+
   panel.webview.onDidReceiveMessage(async (msg) => {
-    switch (msg.type) {
-      case "applyAll":
-        await applyFiles(result.changes);
-        panel.webview.postMessage({ type: "applied" });
-        break;
-      case "applyFile": {
-        const file = result.changes[msg.i];
-        if (file) {
-          await applyFiles([file]);
+    logGeneratePreview("Webview click", msg);
+
+    try {
+      switch (msg.type) {
+        case "applyAll": {
+          logGeneratePreview("Apply All handler — using normalized files", {
+            fileCount: files.length,
+            paths: files.map((f) => f.path),
+          });
+          const applyResult = await applyFiles(files);
+          const status = buildApplyResultMessage(applyResult, files.length);
+          if (status.level === "success") {
+            vscode.window.showInformationMessage(status.message);
+          } else {
+            vscode.window.showErrorMessage(status.message);
+          }
+          panel.webview.postMessage({ type: "status", ...status });
+          break;
         }
-        break;
-      }
-      case "copy": {
-        const file = result.changes[msg.i];
-        if (file) {
-          await vscode.env.clipboard.writeText(file.codeContent);
-          vscode.window.showInformationMessage("Copied!");
+        case "applyFile": {
+          const file = files[msg.i];
+          if (!file) {
+            const message = `Could not find generated file at index ${msg.i}.`;
+            vscode.window.showErrorMessage(message);
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message,
+            });
+            break;
+          }
+
+          const applyResult = await applyFiles([file]);
+          const status = buildApplyResultMessage(applyResult, 1);
+          if (status.level === "success") {
+            vscode.window.showInformationMessage(status.message);
+          } else {
+            vscode.window.showErrorMessage(status.message);
+          }
+          panel.webview.postMessage({ type: "status", ...status });
+          break;
         }
-        break;
+        case "copy": {
+          const file = files[msg.i];
+          if (!file) {
+            const message = `Could not find generated file at index ${msg.i}.`;
+            vscode.window.showErrorMessage(message);
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message,
+            });
+            break;
+          }
+
+          await vscode.env.clipboard.writeText(file.content);
+          const message = `Copied ${file.path} to the clipboard.`;
+          vscode.window.showInformationMessage(message);
+          panel.webview.postMessage({
+            type: "status",
+            level: "success",
+            message,
+          });
+          break;
+        }
       }
+    } catch (e: unknown) {
+      const message = `Apply failed: ${extractApiError(e)}`;
+      logGeneratePreview("Apply handler failed", { error: message, msg });
+      vscode.window.showErrorMessage(message);
+      panel.webview.postMessage({ type: "status", level: "error", message });
     }
   });
 
-  const files = JSON.stringify(
-    result.changes.map((c) => ({
-      name: c.fileName,
-      content: c.codeContent,
-      lang: path.extname(c.fileName).replace(".", "").toUpperCase() || "FILE",
-      lines: c.codeContent.split("\n").length,
+  // Sanitize the JSON so that embedded </script> or <!-- sequences in
+  // generated file content cannot break the HTML parser and silently kill
+  // the webview script.  This is the single source of truth for the UI.
+  const filesJson = JSON.stringify(
+    files.map((file) => ({
+      name: file.path,
+      content: file.content,
+      lang: file.lang,
+      lines: file.lines,
     })),
-  );
+  )
+    .replace(/<\//g, "<\\/")
+    .replace(/<!--/g, "<\\!--");
+
+  logGeneratePreview("Webview filesJson", {
+    fileCount: files.length,
+    jsonLength: filesJson.length,
+  });
 
   panel.webview.html = /*html*/ `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
@@ -304,6 +760,7 @@ function showPreview(result: GenerateResult, prompt: string) {
 .cb{max-height:350px;overflow:auto;display:none}.cb.open{display:block}
 .cb pre{margin:0;padding:14px;font-family:'Cascadia Code','Fira Code',monospace;font-size:11px;line-height:1.5;color:rgba(255,255,255,.85);white-space:pre;overflow-x:auto}
 .done{display:none;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:#4ade80;padding:10px 20px;text-align:center;font-weight:600;font-size:13px}.done.show{display:block}
+.err{display:none;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.25);color:#fca5a5;padding:10px 20px;text-align:center;font-weight:600;font-size:13px}.err.show{display:block}
 /* Preview */
 .preview-container{padding:12px 20px}
 .preview-toolbar{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
@@ -317,10 +774,11 @@ function showPreview(result: GenerateResult, prompt: string) {
 .size-bar button{padding:3px 8px;font-size:10px}
 </style></head><body>
 <div class="done" id="done">Files applied to workspace</div>
+<div class="err" id="err"></div>
 <div class="hd"><div class="hd-top"><h2>Generated Code<span class="badge" id="cnt"></span></h2>
 <button class="btn bp" onclick="applyAll()" id="ab">Apply All</button></div>
 <div class="prompt">${escapeHtml(prompt)}</div></div>
-${result.summary ? `<div class="sm">${escapeHtml(result.summary)}</div>` : ""}
+${summary ? `<div class="sm">${escapeHtml(summary)}</div>` : ""}
 <div class="main-tabs">
 <button class="main-tab active" onclick="switchTab('code')">Code</button>
 <button class="main-tab" onclick="switchTab('preview')">Live Preview</button>
@@ -344,7 +802,8 @@ ${result.summary ? `<div class="sm">${escapeHtml(result.summary)}</div>` : ""}
 </div>
 </div>
 <script>
-const vscode=acquireVsCodeApi(),files=${files};
+const vscode=acquireVsCodeApi(),files=${filesJson};
+console.log('[uigenai][generate-preview] Webview render — fileCount:', files.length, 'renderMode:', files.length > 0 ? 'structured-files' : 'empty');
 document.getElementById('cnt').textContent=files.length+' files';
 
 /* ---- Tab switching ---- */
@@ -359,10 +818,23 @@ const fl=document.getElementById('fl');
 files.forEach((f,i)=>{const d=document.createElement('div');d.className='fi';d.innerHTML=\`<div class="fh" onclick="tog(\${i})"><div class="fn">\${esc(f.name)}</div><div style="display:flex;align-items:center;gap:10px"><div class="fm">\${f.lang} · \${f.lines} lines</div><div class="fa"><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();cp(\${i})" title="Copy">Copy</button><button class="btn bs" style="padding:3px 8px;font-size:10px" onclick="event.stopPropagation();af(\${i})" title="Apply">Apply</button></div></div></div><div class="cb" id="c\${i}"><pre>\${esc(f.content)}</pre></div>\`;fl.appendChild(d)});
 
 function tog(i){document.getElementById('c'+i).classList.toggle('open')}
-function applyAll(){vscode.postMessage({type:'applyAll'})}
-function af(i){vscode.postMessage({type:'applyFile',i})}
-function cp(i){vscode.postMessage({type:'copy',i})}
+function applyAll(){console.log('[uigenai][generate-preview] click applyAll — fileCount:', files.length, 'files:', files.map(f=>f.name));vscode.postMessage({type:'applyAll'})}
+function af(i){console.log('[uigenai][generate-preview] click applyFile', i);vscode.postMessage({type:'applyFile',i})}
+function cp(i){console.log('[uigenai][generate-preview] click copy', i);vscode.postMessage({type:'copy',i})}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function showStatus(level,message){
+  const ok=document.getElementById('done');
+  const err=document.getElementById('err');
+  ok.classList.remove('show');
+  err.classList.remove('show');
+  if(level==='success'){
+    ok.textContent=message;
+    ok.classList.add('show');
+    return;
+  }
+  err.textContent=message;
+  err.classList.add('show');
+}
 
 /* ---- Live Preview tab ---- */
 const previewable=['.jsx','.tsx','.html','.htm','.vue','.svelte'];
@@ -490,53 +962,86 @@ function setSize(w,h){
   event.target.classList.add('active-view');
 }
 
-window.addEventListener('message',e=>{if(e.data.type==='applied'){document.getElementById('done').classList.add('show');const b=document.getElementById('ab');b.disabled=true;b.textContent='Applied'}})
+window.addEventListener('message',e=>{
+  if(e.data.type==='status'){
+    showStatus(e.data.level,e.data.message);
+    if(e.data.level==='success'&&e.data.message.includes('Applied')){
+      const b=document.getElementById('ab');
+      b.disabled=false;
+      b.textContent='Apply All';
+    }
+  }
+})
 </script></body></html>`;
 }
 
-async function applyFiles(changes: GenerateChange[]) {
-  const wf = vscode.workspace.workspaceFolders;
-  let base: vscode.Uri;
-  if (!wf?.length) {
-    const f = await vscode.window.showOpenDialog({
-      canSelectFolders: true,
-      canSelectFiles: false,
-      title: "Quick Generate — Select Target Folder",
-    });
-    if (!f?.length) {
-      return;
-    }
-    base = f[0];
-  } else {
-    base =
-      wf.length === 1
-        ? wf[0].uri
-        : (await vscode.window.showWorkspaceFolderPick())?.uri || wf[0].uri;
+async function applyFiles(files: GeneratedFile[]): Promise<ApplyFilesResult> {
+  const base = getCurrentWorkspaceRoot();
+  if (!base) {
+    throw new Error(
+      "Open a workspace folder first before applying generated files.",
+    );
   }
 
-  let n = 0;
-  for (const c of changes) {
-    if (!c) {
+  logGeneratePreview("Workspace root", {
+    fsPath: base.fsPath,
+    fileCount: files.length,
+  });
+
+  const result: ApplyFilesResult = {
+    root: base,
+    written: [],
+    failures: [],
+  };
+
+  for (const file of files) {
+    const relativePath = sanitizeGeneratedPath(file.path);
+    if (!relativePath) {
+      const error = "Invalid generated file path.";
+      result.failures.push({ path: file.path, error });
+      logGeneratePreview("File write failed", { path: file.path, error });
       continue;
     }
-    const p = c.fileName.replace(/^\/+/, "");
-    const uri = vscode.Uri.joinPath(base, p);
+
+    const fileUri = vscode.Uri.joinPath(base, ...relativePath.split("/"));
+    const dirName = path.posix.dirname(relativePath);
+
     try {
-      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, ".."));
-    } catch {}
-    await vscode.workspace.fs.writeFile(
-      uri,
-      Buffer.from(c.codeContent, "utf-8"),
-    );
-    n++;
+      if (dirName && dirName !== ".") {
+        await vscode.workspace.fs.createDirectory(
+          vscode.Uri.joinPath(base, ...dirName.split("/")),
+        );
+      }
+
+      await vscode.workspace.fs.writeFile(
+        fileUri,
+        Buffer.from(file.content, "utf-8"),
+      );
+      result.written.push(file);
+    } catch (e: unknown) {
+      const error = extractApiError(e);
+      result.failures.push({ path: relativePath, error });
+      logGeneratePreview("File write failed", {
+        path: relativePath,
+        workspaceRoot: base.fsPath,
+        error,
+      });
+    }
   }
-  vscode.window.showInformationMessage(`${n} file(s) written to workspace.`);
-  if (changes[0]) {
+
+  if (result.written[0]) {
     try {
       const doc = await vscode.workspace.openTextDocument(
-        vscode.Uri.joinPath(base, changes[0].fileName.replace(/^\/+/, "")),
+        vscode.Uri.joinPath(base, ...result.written[0].path.split("/")),
       );
       await vscode.window.showTextDocument(doc);
-    } catch {}
+    } catch (e: unknown) {
+      logGeneratePreview("Failed to open first written file", {
+        path: result.written[0].path,
+        error: extractApiError(e),
+      });
+    }
   }
+
+  return result;
 }
