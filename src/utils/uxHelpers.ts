@@ -13,6 +13,7 @@ import {
   AI_PROVIDERS,
   buildDesignSystemContent,
 } from "./designPresets";
+import { parseSessionOutputToFiles, showPreviewPanel } from "./previewPanel";
 
 // Types
 
@@ -38,7 +39,7 @@ export interface ProviderModelChoice {
   model: string;
 }
 
-//  Project Picker 
+//  Project Picker
 
 export async function pickProject(
   stepLabel: string,
@@ -81,7 +82,7 @@ export async function pickProject(
   return pick ? { id: pick.value.id, name: pick.value.name } : undefined;
 }
 
-//  Framework Picker 
+//  Framework Picker
 
 export async function pickFramework(
   stepLabel: string,
@@ -99,11 +100,15 @@ export async function pickFramework(
   );
 
   return pick
-    ? { label: pick.value.label, value: pick.value.value, sessionValue: pick.value.sessionValue }
+    ? {
+        label: pick.value.label,
+        value: pick.value.value,
+        sessionValue: pick.value.sessionValue,
+      }
     : undefined;
 }
 
-//Design System Picker 
+//Design System Picker
 
 export async function pickDesignSystem(
   stepLabel: string,
@@ -111,7 +116,12 @@ export async function pickDesignSystem(
   const pick = await vscode.window.showQuickPick(
     DESIGN_SYSTEMS.map((d) => ({
       label: d.label,
-      description: d.cssStrategy === "tailwind" ? "Tailwind" : d.cssStrategy === "css-modules" ? "CSS Modules" : d.cssStrategy,
+      description:
+        d.cssStrategy === "tailwind"
+          ? "Tailwind"
+          : d.cssStrategy === "css-modules"
+            ? "CSS Modules"
+            : d.cssStrategy,
       value: d,
     })),
     {
@@ -131,7 +141,7 @@ export async function pickDesignSystem(
   };
 }
 
-// AI Provider + Model Picker 
+// AI Provider + Model Picker
 
 export async function pickProviderAndModel(
   stepLabel: string,
@@ -170,7 +180,7 @@ export async function pickProviderAndModel(
   return { provider: providerPick.value, model };
 }
 
-// Pre-flight Summary 
+// Pre-flight Summary
 
 export async function confirmGeneration(lines: string[]): Promise<boolean> {
   const summary = lines.join("\n");
@@ -182,31 +192,51 @@ export async function confirmGeneration(lines: string[]): Promise<boolean> {
   return action === "Generate";
 }
 
-// Result Handler 
+// Result Handler
 
 export async function showSessionResult(result: {
   status: string;
   error_message?: string | null;
   output_summary_md?: string | null;
 }): Promise<void> {
-  if (result.status === "SUCCEEDED") {
-    const action = await vscode.window.showInformationMessage(
-      "Generation succeeded — your code is ready.",
-      "View Output",
-      "Close",
-    );
-    if (action === "View Output" && result.output_summary_md) {
-      const doc = await vscode.workspace.openTextDocument({
-        content: result.output_summary_md,
-        language: "markdown",
-      });
-      await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
-    }
-  } else {
+  if (result.status !== "SUCCEEDED") {
     const errText = result.error_message || "Unknown error";
     await vscode.window.showErrorMessage(
       `Generation failed: ${errText}`,
       "Close",
     );
+    return;
+  }
+
+  // Try to extract structured files from the session output
+  const rawOutput = result.output_summary_md || "";
+  const files = parseSessionOutputToFiles(rawOutput);
+
+  if (files.length > 0) {
+    let summary: string | undefined;
+    try {
+      const envelope = JSON.parse(rawOutput);
+      if (typeof envelope?.summary_md === "string") {
+        summary = envelope.summary_md;
+      }
+    } catch {
+      // Not a JSON envelope — old session with plain markdown
+    }
+    showPreviewPanel(files, "Session Generation Result", summary);
+    return;
+  }
+
+  // Fallback: no extractable files — show as markdown
+  const action = await vscode.window.showInformationMessage(
+    "Generation succeeded. Output does not contain extractable files.",
+    "View Output",
+    "Close",
+  );
+  if (action === "View Output" && result.output_summary_md) {
+    const doc = await vscode.workspace.openTextDocument({
+      content: result.output_summary_md,
+      language: "markdown",
+    });
+    await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
   }
 }

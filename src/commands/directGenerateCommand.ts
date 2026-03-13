@@ -1,4 +1,3 @@
-
 import * as vscode from "vscode";
 import * as fs from "fs";
 import { parseAndDerive } from "../utils/openApiUtils";
@@ -14,18 +13,20 @@ import {
   showSessionResult,
 } from "../utils/uxHelpers";
 
-const FLOW_NAME = "Generate from OpenAPI";
+const FLOW_NAME = "From OpenAPI";
 
 export async function directGenerateCmd(
   _context: vscode.ExtensionContext,
 ): Promise<void> {
-  //  Pick project 
-  const project = await pickProject(`${FLOW_NAME} — Step 1/6: Select Project`);
+  // Pick project
+  const project = await pickProject(
+    `${FLOW_NAME} \u2014 Step 1 of 6: Select Project`,
+  );
   if (!project) {
     return;
   }
 
-  //  Pick OpenAPI file
+  // Pick OpenAPI file
   const fileUris = await vscode.window.showOpenDialog({
     canSelectFiles: true,
     canSelectFolders: false,
@@ -33,7 +34,7 @@ export async function directGenerateCmd(
     filters: {
       "OpenAPI / Swagger": ["json", "yaml", "yml"],
     },
-    title: `${FLOW_NAME} — Step 2/6: Select Swagger / OpenAPI File`,
+    title: `${FLOW_NAME} \u2014 Step 2 of 6: Select Swagger / OpenAPI File`,
   });
   if (!fileUris?.length) {
     return;
@@ -63,7 +64,7 @@ export async function directGenerateCmd(
   const parsed = JSON.parse(entitySchema);
   const entityCount = parsed.entities?.length ?? 0;
   const proceed = await vscode.window.showInformationMessage(
-    `Valid OpenAPI detected — ${entityCount} entity schema(s) derived.`,
+    `OpenAPI validated \u2014 ${entityCount} entity schema(s) derived.`,
     "Continue",
     "Preview Schema",
     "Cancel",
@@ -87,10 +88,10 @@ export async function directGenerateCmd(
     return;
   }
 
-  //  ACTION_SPEC — user prompt 
+  // ACTION_SPEC — user prompt
   const prompt = await vscode.window.showInputBox({
-    title: `${FLOW_NAME} — Step 3/6: Describe What to Generate`,
-    prompt: "This becomes the ACTION_SPEC sent to the AI",
+    title: `${FLOW_NAME} \u2014 Step 3 of 6: Describe What to Generate`,
+    prompt: "Describe the UI you want to generate",
     placeHolder:
       "e.g. Create a product management dashboard with CRUD table, search, and filters",
     ignoreFocusOut: true,
@@ -99,30 +100,44 @@ export async function directGenerateCmd(
     return;
   }
 
-  //  Design system preset 
-  const design = await pickDesignSystem(`${FLOW_NAME} — Step 4/6: Design System`);
+  // Design system preset
+  const design = await pickDesignSystem(
+    `${FLOW_NAME} \u2014 Step 4 of 6: Design System`,
+  );
   if (!design) {
     return;
   }
 
-  // Framework 
-  const framework = await pickFramework(`${FLOW_NAME} — Step 5/6: Framework`);
+  // Framework
+  const framework = await pickFramework(
+    `${FLOW_NAME} \u2014 Step 5 of 6: Framework`,
+  );
   if (!framework) {
     return;
   }
 
-  // AI Provider + Model 
-  const providerModel = await pickProviderAndModel(`${FLOW_NAME} — Step 6/6: AI Provider`);
+  // AI Provider + Model
+  const providerModel = await pickProviderAndModel(
+    `${FLOW_NAME} \u2014 Step 6 of 6: AI Provider`,
+  );
   if (!providerModel) {
     return;
   }
 
-  //  Pre-flight confirmation 
+  // Pre-flight confirmation
+  const fileName = fileUris[0].fsPath.split(/[\\/]/).pop();
   const confirmed = await confirmGeneration([
     `Project: ${project.name}`,
-    `OpenAPI: ${fileUris[0].fsPath.split(/[\\/]/).pop()} (${entityCount} entities)`,
+    ``,
+    `Documents to upload:`,
+    `  OPENAPI: ${fileName} (${entityCount} entities)`,
+    `  ENTITY_SCHEMA: derived from OpenAPI`,
+    `  ACTION_SPEC: from prompt`,
+    `  DESIGN_SYSTEM: ${design.label}`,
+    ``,
     `Prompt: "${prompt.trim().slice(0, 80)}${prompt.trim().length > 80 ? "..." : ""}"`,
-    `Stack: ${framework.label} + ${design.label} | ${providerModel.provider}/${providerModel.model}`,
+    `Stack: ${framework.label} + ${design.label}`,
+    `Provider: ${providerModel.provider} / ${providerModel.model}`,
   ]);
   if (!confirmed) {
     return;
@@ -137,14 +152,18 @@ export async function directGenerateCmd(
     },
     async (progress) => {
       try {
-        progress.report({ message: "[1/5] Uploading OpenAPI specification..." });
+        progress.report({
+          message: "[1/5] Uploading OpenAPI specification...",
+        });
         await documentsApi.upsert(projectId(), "OPENAPI", {
           name: "OpenAPI Specification",
           content: openApiContent,
           content_type: "application/json",
         });
 
-        progress.report({ message: "[2/5] Uploading derived Entity Schema..." });
+        progress.report({
+          message: "[2/5] Uploading derived Entity Schema...",
+        });
         await documentsApi.upsert(projectId(), "ENTITY_SCHEMA", {
           name: "Entity Schema (derived from OpenAPI)",
           content: entitySchema,
@@ -173,7 +192,9 @@ export async function directGenerateCmd(
           cssStrategy: design.cssStrategy,
         });
 
-        progress.report({ message: "Generating code — this may take a minute..." });
+        progress.report({
+          message: "Generating code — this may take a minute...",
+        });
         const result = await pollSession(projectId(), session.id);
 
         await showSessionResult(result);
@@ -190,7 +211,7 @@ export async function directGenerateCmd(
   }
 }
 
-//  Polling helper 
+//  Polling helper
 
 interface SessionStatus {
   id: string;

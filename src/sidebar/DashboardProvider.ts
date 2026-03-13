@@ -11,6 +11,7 @@ import { generatedCodesApi, GeneratedCode } from "../api/generatedCodes.api";
 import { deploymentsApi, Deployment } from "../api/deployments.api";
 import { extractApiError } from "../utils/errors";
 import { escapeHtml } from "../utils/html";
+import { showSessionReviewPanel } from "../utils/sessionReviewPanel";
 
 export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "uigenai.dashboard";
@@ -126,14 +127,20 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand("uigenai.runSession", msg.projectId);
           break;
         case "viewSession": {
-          const s = await sessionsApi.getById(msg.projectId, msg.id);
-          const td = await vscode.workspace.openTextDocument({
-            content:
-              s.output_summary_md ||
-              `Status: ${s.status}\nProvider: ${s.provider}\nModel: ${s.model}`,
-            language: "markdown",
-          });
-          await vscode.window.showTextDocument(td, { preview: true });
+          await showSessionReviewPanel(msg.projectId, msg.id);
+          break;
+        }
+        case "deleteSession": {
+          const confirmDel = await vscode.window.showWarningMessage(
+            "Delete this session? This cannot be undone.",
+            { modal: true },
+            "Delete",
+          );
+          if (confirmDel === "Delete") {
+            await sessionsApi.delete(msg.projectId, msg.id);
+            vscode.window.showInformationMessage("Session deleted.");
+            vscode.commands.executeCommand("uigenai.refreshSidebar");
+          }
           break;
         }
 
@@ -273,6 +280,12 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
         case "generate":
           vscode.commands.executeCommand("uigenai.generate");
           break;
+        case "directGenerate":
+          vscode.commands.executeCommand("uigenai.directGenerate");
+          break;
+        case "advancedGenerate":
+          vscode.commands.executeCommand("uigenai.advancedGenerate");
+          break;
       }
     } catch (e: unknown) {
       vscode.window.showErrorMessage(extractApiError(e));
@@ -372,16 +385,39 @@ ${
   <span style="color:var(--text2)">Not logged in</span>
   <div style="display:flex;gap:4px;flex-wrap:wrap">
     <button class="btn-p" onclick="send('login')">Login</button>
-    <button class="btn-s" onclick="send('oauthGoogle')" title="Google">🔵 Google</button>
-    <button class="btn-s" onclick="send('oauthGithub')" title="GitHub">⚫ GitHub</button>
+    <button class="btn-s" onclick="send('oauthGoogle')" title="Sign in with Google">Google</button>
+    <button class="btn-s" onclick="send('oauthGithub')" title="Sign in with GitHub">GitHub</button>
   </div>
 `
 }
 </div>
 
-<!-- Quick Generate -->
-<div class="gen">
-  <button class="btn-p" onclick="send('generate')">⚡ Generate Code</button>
+<!-- Generate Section -->
+<div class="section" id="sec-generate">
+  <div class="sec-hd" onclick="toggleSec('generate')">
+    <h3>Generate</h3>
+    <span class="arrow open" id="arrow-generate">&#9654;</span>
+  </div>
+  <div class="sec-body open" id="body-generate">
+    ${
+      user
+        ? `
+    <div style="padding:2px 0 6px">
+      <button class="btn-p" style="width:100%;padding:7px 8px;font-size:11px;font-weight:600;margin-bottom:4px;text-align:left"
+        onclick="send('directGenerate')">From OpenAPI / Swagger</button>
+      <div style="color:var(--text2);font-size:10px;padding:0 4px 8px">Upload a Swagger file, derive schemas, and generate UI into your project.</div>
+
+      <button class="btn-p" style="width:100%;padding:7px 8px;font-size:11px;font-weight:600;margin-bottom:4px;text-align:left;background:var(--accent2)"
+        onclick="send('advancedGenerate')">From Source Folder</button>
+      <div style="color:var(--text2);font-size:10px;padding:0 4px 8px">Scan backend source code to infer API schemas, then generate UI.</div>
+    </div>
+    `
+        : ""
+    }
+    <button class="btn-s" style="width:100%;padding:6px 8px;font-size:11px;text-align:left"
+      onclick="send('generate')">Quick Generate (Prompt Only)</button>
+    <div style="color:var(--text2);font-size:10px;padding:2px 4px 4px">Generate UI from a text prompt without a project.</div>
+  </div>
 </div>
 
 ${
@@ -390,7 +426,7 @@ ${
 <!-- Projects Section -->
 <div class="section" id="sec-projects">
   <div class="sec-hd" onclick="toggleSec('projects')">
-    <h3>📁 Projects</h3>
+    <h3>Projects</h3>
     <div style="display:flex;align-items:center;gap:4px">
       <button class="btn-icon" title="New Project" onclick="event.stopPropagation();send('createProject')">＋</button>
       <span class="arrow" id="arrow-projects">▶</span>
@@ -405,7 +441,7 @@ ${
 <!-- APIs Section -->
 <div class="section" id="sec-apis">
   <div class="sec-hd" onclick="toggleSec('apis')">
-    <h3>🔌 APIs</h3>
+    <h3>APIs</h3>
     <div style="display:flex;align-items:center;gap:4px">
       <button class="btn-icon" title="New API" onclick="event.stopPropagation();send('createApi')">＋</button>
       <span class="arrow" id="arrow-apis">▶</span>
@@ -459,11 +495,11 @@ function renderProjects(projects) {
     </div>
     <div class="sub" id="psub-\${p.id}" style="display:none">
       <div class="sub-hd" onclick="toggleProjectSubSec('\${p.id}','docs')">
-        📄 Documents <button class="btn-icon" onclick="event.stopPropagation();send('uploadDocument',{projectId:'\${p.id}'})">＋</button>
+        Documents <button class="btn-icon" onclick="event.stopPropagation();send('uploadDocument',{projectId:'\${p.id}'})">＋</button>
       </div>
       <div class="sub-body" id="pdocs-\${p.id}"></div>
       <div class="sub-hd" onclick="toggleProjectSubSec('\${p.id}','sessions')">
-        🔄 Sessions <button class="btn-icon" onclick="event.stopPropagation();send('runSession',{projectId:'\${p.id}'})">▶</button>
+        Sessions <button class="btn-icon" onclick="event.stopPropagation();send('runSession',{projectId:'\${p.id}'})">▶</button>
       </div>
       <div class="sub-body" id="psess-\${p.id}"></div>
     </div>
@@ -526,22 +562,22 @@ function renderApis(apis) {
     </div>
     <div class="sub" id="asub-\${a.id}" style="display:none">
       <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','configs')">
-        ⚙️ Configs <button class="btn-icon" onclick="event.stopPropagation();send('createConfig',{apiId:'\${a.id}'})">＋</button>
+        Configs <button class="btn-icon" onclick="event.stopPropagation();send('createConfig',{apiId:'\${a.id}'})">＋</button>
       </div>
       <div class="sub-body" id="acfg-\${a.id}"></div>
 
       <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','schemas')">
-        📐 UI Schemas <button class="btn-icon" onclick="event.stopPropagation();send('createSchema',{apiId:'\${a.id}'})">＋</button>
+        UI Schemas <button class="btn-icon" onclick="event.stopPropagation();send('createSchema',{apiId:'\${a.id}'})">＋</button>
       </div>
       <div class="sub-body" id="asch-\${a.id}"></div>
 
       <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','codes')">
-        💻 Generated Codes
+        Generated Codes
       </div>
       <div class="sub-body" id="acod-\${a.id}"></div>
 
       <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','deployments')">
-        🚀 Deployments <button class="btn-icon" onclick="event.stopPropagation();send('createDeployment',{apiId:'\${a.id}'})">＋</button>
+        Deployments <button class="btn-icon" onclick="event.stopPropagation();send('createDeployment',{apiId:'\${a.id}'})">＋</button>
       </div>
       <div class="sub-body" id="adep-\${a.id}"></div>
     </div>
