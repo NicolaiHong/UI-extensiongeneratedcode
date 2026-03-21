@@ -3,6 +3,7 @@ import { getApi, unwrap } from "./client";
 export interface Deployment {
   id: string;
   api_id: string;
+  generation_session_id: string | null;
   environment: "DEVELOPMENT" | "STAGING" | "PRODUCTION";
   status: "PENDING" | "IN_PROGRESS" | "DEPLOYED" | "FAILED" | "ROLLED_BACK";
   provider: string | null;
@@ -23,6 +24,7 @@ export const deploymentsApi = {
       status?: string;
       provider?: string;
       metadata_json?: any;
+      generation_session_id?: string;
     },
   ): Promise<Deployment> =>
     unwrap(await getApi().post(`/api/apis/${apiId}/deployments`, data)),

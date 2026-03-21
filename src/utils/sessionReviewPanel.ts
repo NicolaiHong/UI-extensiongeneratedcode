@@ -11,6 +11,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { Session, sessionsApi } from "../api/sessions.api";
+import { apisApi } from "../api/apis.api";
 import {
   GeneratedFile,
   parseSessionOutputToFiles,
@@ -33,6 +34,7 @@ import { escapeHtml } from "./html";
 export async function showSessionReviewPanel(
   projectId: string,
   sessionId: string,
+  opts?: { apiId?: string; enableMarkReady?: boolean; onMarkedReady?: () => void },
 ): Promise<void> {
   const session = await sessionsApi.getById(projectId, sessionId);
 
@@ -83,6 +85,36 @@ export async function showSessionReviewPanel(
             vscode.window.showErrorMessage(status.message);
           }
           panel.webview.postMessage({ type: "status", ...status });
+          break;
+        }
+
+        case "markReady": {
+          if (!opts?.enableMarkReady || !opts?.apiId) {
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: "Mark Ready to Deploy is unavailable for this session.",
+            });
+            break;
+          }
+          try {
+            await apisApi.markReadyToDeploy(opts.apiId);
+            panel.webview.postMessage({
+              type: "status",
+              level: "success",
+              message: "API marked Ready to Deploy.",
+            });
+            vscode.window.showInformationMessage("API marked Ready to Deploy.");
+            opts.onMarkedReady?.();
+            vscode.commands.executeCommand("uigenai.refreshSidebar");
+          } catch (e: any) {
+            const err = e?.message || e?.response?.data?.message || String(e);
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: `Failed: ${err}`,
+            });
+          }
           break;
         }
 
@@ -144,7 +176,12 @@ export async function showSessionReviewPanel(
     }
   });
 
-  panel.webview.html = buildReviewHtml(session, files, summaryText);
+  panel.webview.html = buildReviewHtml(
+    session,
+    files,
+    summaryText,
+    opts?.enableMarkReady ?? false,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +282,7 @@ function buildReviewHtml(
   session: Session,
   files: GeneratedFile[],
   summary: string,
+  canMarkReady: boolean,
 ): string {
   const hasFiles = files.length > 0;
   const tree = hasFiles ? buildFileTree(files) : null;
@@ -355,10 +393,12 @@ ${hasFiles ? `
 <div class="actions">
   <button class="btn btn-primary" onclick="action('applyAll')">📁 Apply All</button>
   <button class="btn btn-secondary" onclick="action('download')">⬇️ Download ZIP</button>
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
 ` : `
 <div class="actions">
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
 `}

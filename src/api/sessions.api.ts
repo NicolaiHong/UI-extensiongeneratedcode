@@ -3,8 +3,10 @@ import { getApi, unwrap } from "./client";
 export interface Session {
   id: string;
   project_id: string;
+  api_id: string | null;
   provider: string;
   model: string;
+  mode: "PREVIEW" | "FULL_SOURCE";
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
   error_message: string | null;
   output_summary_md: string | null;
@@ -26,6 +28,8 @@ export const sessionsApi = {
       model?: string;
       framework?: string;
       cssStrategy?: string;
+      mode?: "PREVIEW" | "FULL_SOURCE";
+      api_id?: string;
     },
   ): Promise<Session> =>
     unwrap(
