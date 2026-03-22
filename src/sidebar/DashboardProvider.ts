@@ -328,8 +328,10 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.apiId,
             "sessionId:",
             msg.sessionId,
+            "model:",
+            msg.model,
           );
-          await this._generateApiSession(msg.apiId, "PREVIEW", msg.sessionId);
+          await this._generateApiSession(msg.apiId, "PREVIEW", msg.sessionId, msg.model);
           break;
         case "generateFull":
           console.log(
@@ -337,11 +339,14 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.apiId,
             "sessionId:",
             msg.sessionId,
+            "model:",
+            msg.model,
           );
           await this._generateApiSession(
             msg.apiId,
             "FULL_SOURCE",
             msg.sessionId,
+            msg.model,
           );
           break;
         case "markReady":
@@ -429,11 +434,14 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     apiId: string,
     mode: "PREVIEW" | "FULL_SOURCE",
     reuseSessionId?: string,
+    model?: string,
   ) {
+    const selectedModel = model || "gemini-2.5-flash";
     console.log("[uigenai] _generateApiSession called:", {
       apiId,
       mode,
       reuseSessionId: reuseSessionId || "new",
+      model: selectedModel,
     });
     if (!apiId) {
       vscode.window.showErrorMessage("Select an API first.");
@@ -458,7 +466,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
                 : "Generating Full Source...",
           },
           // Use API-scoped session runner (no project required)
-          async () => apisApi.runSession(apiId, { mode }),
+          async () => apisApi.runSession(apiId, { mode, provider: "gemini", model: selectedModel }),
         );
       }
 
@@ -763,6 +771,18 @@ ${
         <select class="wf-select" id="wf-select" onchange="onSelectWorkflow(this.value)"></select>
         <span class="wf-badge info" id="wf-state">--</span>
       </div>
+      <div class="wf-row" style="margin-top:6px">
+        <label style="font-size:10px;color:var(--text2);min-width:45px">Model:</label>
+        <select class="wf-select" id="wf-model-select" style="flex:1">
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended)</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          <option value="gemini-2.0-flash-001">Gemini 2.0 Flash 001</option>
+          <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
+          <option value="gemini-2.0-flash-lite-001">Gemini 2.0 Flash-Lite 001</option>
+        </select>
+      </div>
       <div class="wf-meta" id="wf-meta">Select an API to see actions.</div>
       <div class="wf-cta">
         <button class="btn-p" id="wf-btn-preview" onclick="clickPreview()" disabled>Preview UI</button>
@@ -1053,13 +1073,18 @@ function setWorkflowMessage(msg) {
   if (metaEl) metaEl.textContent = msg;
 }
 
+function getSelectedModel() {
+  const sel = document.getElementById('wf-model-select');
+  return sel ? sel.value : 'gemini-2.5-flash';
+}
+
 function clickPreview() {
   console.log('[uigenai][workflow] Preview UI click', selectedApiId);
   if (!selectedApiId) {
     setWorkflowMessage("Select an API first.");
     return;
   }
-  send('generatePreview', { apiId: selectedApiId });
+  send('generatePreview', { apiId: selectedApiId, model: getSelectedModel() });
 }
 
 function clickFull() {
@@ -1071,7 +1096,7 @@ function clickFull() {
     setWorkflowMessage("Run a successful Preview UI first.");
     return;
   }
-  send('generateFull', { apiId: selectedApiId });
+  send('generateFull', { apiId: selectedApiId, model: getSelectedModel() });
 }
 
 function clickReady() {
