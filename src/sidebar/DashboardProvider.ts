@@ -852,34 +852,6 @@ ${
 }
 </div>
 
-<!-- Generate Section -->
-<div class="section" id="sec-generate">
-  <div class="sec-hd" onclick="toggleSec('generate')">
-    <h3>Generate</h3>
-    <span class="arrow open" id="arrow-generate">&#9654;</span>
-  </div>
-  <div class="sec-body open" id="body-generate">
-    ${
-      user
-        ? `
-    <div style="padding:2px 0 6px">
-      <button class="btn-p" style="width:100%;padding:7px 8px;font-size:11px;font-weight:600;margin-bottom:4px;text-align:left"
-        onclick="send('directGenerate')">From OpenAPI / Swagger</button>
-      <div style="color:var(--text2);font-size:10px;padding:0 4px 8px">Upload a Swagger file, derive schemas, and generate UI into your project.</div>
-
-      <button class="btn-p" style="width:100%;padding:7px 8px;font-size:11px;font-weight:600;margin-bottom:4px;text-align:left;background:var(--accent2)"
-        onclick="send('advancedGenerate')">From Source Folder</button>
-      <div style="color:var(--text2);font-size:10px;padding:0 4px 8px">Scan backend source code to infer API schemas, then generate UI.</div>
-    </div>
-    `
-        : ""
-    }
-    <button class="btn-s" style="width:100%;padding:6px 8px;font-size:11px;text-align:left"
-      onclick="send('generate')">Quick Generate (Prompt Only)</button>
-    <div style="color:var(--text2);font-size:10px;padding:2px 4px 4px">Generate UI from a text prompt without a project.</div>
-  </div>
-</div>
-
 ${
   user
     ? `
@@ -942,21 +914,6 @@ ${
   </div>
 </div>
 
-<!-- Projects Section -->
-<div class="section" id="sec-projects">
-  <div class="sec-hd" onclick="toggleSec('projects')">
-    <h3>Projects</h3>
-    <div style="display:flex;align-items:center;gap:4px">
-      <button class="btn-icon" title="New Project" onclick="event.stopPropagation();send('createProject')">＋</button>
-      <span class="arrow" id="arrow-projects">▶</span>
-    </div>
-  </div>
-  <div class="sec-body" id="body-projects">
-    <div class="empty" id="projects-loading"><span class="spin">⟳</span> Loading...</div>
-    <div id="projects-list"></div>
-  </div>
-</div>
-
 <!-- APIs Section -->
 <div class="section" id="sec-apis">
   <div class="sec-hd" onclick="toggleSec('apis')">
@@ -972,7 +929,7 @@ ${
   </div>
 </div>
 `
-    : `<div style="padding:16px 10px;text-align:center;color:var(--text2)">Login to view your projects and APIs.</div>`
+    : `<div style="padding:16px 10px;text-align:center;color:var(--text2)">Login to view your APIs.</div>`
 }
 
 <!-- Add Document Modal -->
@@ -1061,7 +1018,6 @@ function toggleSec(id) {
   const open = b.classList.toggle('open');
   a.classList.toggle('open', open);
   if (open) {
-    if (id === 'projects') send('loadProjects');
     if (id === 'apis') send('loadApis');
     if (id === 'workflow') send('loadApis');
   }
@@ -1423,31 +1379,43 @@ function renderApis(apis) {
     </div>
     <div class="sub" id="asub-\${a.id}" style="display:none">
       <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','apidocs')">
-        Documents <button class="btn-icon" onclick="event.stopPropagation();showAddDocModal('\${a.id}')" title="Add Document">＋</button>
+        📄 Documents <button class="btn-icon" onclick="event.stopPropagation();showAddDocModal('\${a.id}')" title="Add Document">＋</button>
       </div>
       <div class="sub-body" id="adoc-\${a.id}"></div>
 
-      <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','configs')">
-        Configs <button class="btn-icon" onclick="event.stopPropagation();send('createConfig',{apiId:'\${a.id}'})">＋</button>
+      <div class="sub-hd" onclick="toggleAdvanced('\${a.id}')" style="color:var(--text2);font-style:italic">
+        ⚙️ Advanced <span class="arrow" id="adv-arrow-\${a.id}" style="font-size:8px">▶</span>
       </div>
-      <div class="sub-body" id="acfg-\${a.id}"></div>
+      <div class="sub-body" id="aadv-\${a.id}">
+        <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','configs')" style="padding-left:10px">
+          Configs <button class="btn-icon" onclick="event.stopPropagation();send('createConfig',{apiId:'\${a.id}'})">＋</button>
+        </div>
+        <div class="sub-body" id="acfg-\${a.id}"></div>
 
-      <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','schemas')">
-        UI Schemas <button class="btn-icon" onclick="event.stopPropagation();send('createSchema',{apiId:'\${a.id}'})">＋</button>
-      </div>
-      <div class="sub-body" id="asch-\${a.id}"></div>
+        <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','schemas')" style="padding-left:10px">
+          UI Schemas <button class="btn-icon" onclick="event.stopPropagation();send('createSchema',{apiId:'\${a.id}'})">＋</button>
+        </div>
+        <div class="sub-body" id="asch-\${a.id}"></div>
 
-      <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','codes')">
-        Generated Codes
-      </div>
-      <div class="sub-body" id="acod-\${a.id}"></div>
+        <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','codes')" style="padding-left:10px">
+          Generated Codes
+        </div>
+        <div class="sub-body" id="acod-\${a.id}"></div>
 
-      <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','deployments')">
-        Deployments <button class="btn-icon" onclick="event.stopPropagation();send('createDeployment',{apiId:'\${a.id}'})">＋</button>
+        <div class="sub-hd" onclick="toggleApiSubSec('\${a.id}','deployments')" style="padding-left:10px">
+          Deployments <button class="btn-icon" onclick="event.stopPropagation();send('createDeployment',{apiId:'\${a.id}'})">＋</button>
+        </div>
+        <div class="sub-body" id="adep-\${a.id}"></div>
       </div>
-      <div class="sub-body" id="adep-\${a.id}"></div>
     </div>
   \`).join('');
+}
+
+function toggleAdvanced(aid) {
+  const el = document.getElementById('aadv-' + aid);
+  const arrow = document.getElementById('adv-arrow-' + aid);
+  const open = el.classList.toggle('open');
+  if (arrow) arrow.textContent = open ? '▼' : '▶';
 }
 
 function toggleApiSub(aid) {
