@@ -9,7 +9,10 @@ import { apiConfigsApi, ApiConfig } from "../api/apiConfigs.api";
 import { uiSchemasApi, UiSchema } from "../api/uiSchemas.api";
 import { generatedCodesApi, GeneratedCode } from "../api/generatedCodes.api";
 import { deploymentsApi, Deployment } from "../api/deployments.api";
-import { apiDocumentsApi, DocumentType as ApiDocType } from "../api/apiDocuments.api";
+import {
+  apiDocumentsApi,
+  DocumentType as ApiDocType,
+} from "../api/apiDocuments.api";
 import { extractApiError } from "../utils/errors";
 import { escapeHtml } from "../utils/html";
 import { showSessionReviewPanel } from "../utils/sessionReviewPanel";
@@ -297,7 +300,10 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           });
           break;
         case "viewApiDocument": {
-          const doc = await apiDocumentsApi.get(msg.apiId, msg.type as ApiDocType);
+          const doc = await apiDocumentsApi.get(
+            msg.apiId,
+            msg.type as ApiDocType,
+          );
           const lang = msg.type === "OPENAPI" ? "yaml" : "json";
           const td = await vscode.workspace.openTextDocument({
             content: doc.content,
@@ -316,6 +322,31 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             });
           }
           break;
+        case "loadApiOpenApiDoc":
+          try {
+            const doc = await apiDocumentsApi.get(
+              msg.apiId,
+              "OPENAPI" as ApiDocType,
+            );
+            if (doc && doc.content) {
+              this._post("apiOpenApiDoc", {
+                apiId: msg.apiId,
+                content: doc.content,
+                name: doc.name || "openapi.yaml",
+              });
+            } else {
+              this._post("apiOpenApiDocError", {
+                apiId: msg.apiId,
+                error: "No OpenAPI document found for this API",
+              });
+            }
+          } catch (e: unknown) {
+            this._post("apiOpenApiDocError", {
+              apiId: msg.apiId,
+              error: extractApiError(e),
+            });
+          }
+          break;
 
         /* ---- API Workflow (Preview / Full Source) ---- */
         case "selectApi":
@@ -331,9 +362,18 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             "model:",
             msg.model,
             "customPrompt:",
-            msg.customPrompt ? msg.customPrompt.substring(0, 50) + "..." : "(none)",
+            msg.customPrompt
+              ? msg.customPrompt.substring(0, 50) + "..."
+              : "(none)",
           );
-          await this._generateApiSession(msg.apiId, "PREVIEW", msg.sessionId, msg.provider, msg.model, msg.customPrompt);
+          await this._generateApiSession(
+            msg.apiId,
+            "PREVIEW",
+            msg.sessionId,
+            msg.provider,
+            msg.model,
+            msg.customPrompt,
+          );
           break;
         case "generateFull":
           console.log(
@@ -344,7 +384,9 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             "model:",
             msg.model,
             "customPrompt:",
-            msg.customPrompt ? msg.customPrompt.substring(0, 50) + "..." : "(none)",
+            msg.customPrompt
+              ? msg.customPrompt.substring(0, 50) + "..."
+              : "(none)",
           );
           await this._generateApiSession(
             msg.apiId,
@@ -362,11 +404,19 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
 
         /* ---- Session Review/Delete ---- */
         case "reviewPreviewSession":
-          console.log("[uigenai] Review preview session:", msg.apiId, msg.sessionId);
+          console.log(
+            "[uigenai] Review preview session:",
+            msg.apiId,
+            msg.sessionId,
+          );
           await this._reviewSession(msg.apiId, msg.sessionId, "PREVIEW");
           break;
         case "reviewFullSession":
-          console.log("[uigenai] Review full session:", msg.apiId, msg.sessionId);
+          console.log(
+            "[uigenai] Review full session:",
+            msg.apiId,
+            msg.sessionId,
+          );
           await this._reviewSession(msg.apiId, msg.sessionId, "FULL_SOURCE");
           break;
         case "deleteApiSession":
@@ -383,6 +433,14 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           break;
         case "advancedGenerate":
           vscode.commands.executeCommand("uigenai.advancedGenerate");
+          break;
+
+        /* ---- Quick Generate (Local Flow) ---- */
+        case "pickOpenApiFile":
+          await this._pickOpenApiFile();
+          break;
+        case "quickGenerate":
+          await this._quickGenerate(msg);
           break;
       }
     } catch (e: unknown) {
@@ -422,8 +480,16 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       const sortedPreview = sortByDate(previewSessions);
       const sortedFull = sortByDate(fullSessions);
 
-      console.log("[uigenai] Latest preview:", sortedPreview[0]?.id, sortedPreview[0]?.status);
-      console.log("[uigenai] Latest full:", sortedFull[0]?.id, sortedFull[0]?.status);
+      console.log(
+        "[uigenai] Latest preview:",
+        sortedPreview[0]?.id,
+        sortedPreview[0]?.status,
+      );
+      console.log(
+        "[uigenai] Latest full:",
+        sortedFull[0]?.id,
+        sortedFull[0]?.status,
+      );
 
       this._post("apiWorkflow", {
         api,
@@ -484,7 +550,9 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       reuseSessionId: reuseSessionId || "new",
       provider: selectedProvider,
       model: selectedModel,
-      customPrompt: customPrompt ? customPrompt.substring(0, 50) + "..." : "(none)",
+      customPrompt: customPrompt
+        ? customPrompt.substring(0, 50) + "..."
+        : "(none)",
     });
     if (!apiId) {
       vscode.window.showErrorMessage("Select an API first.");
@@ -509,12 +577,13 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
                 : "Generating Full Source...",
           },
           // Use API-scoped session runner (no project required)
-          async () => apisApi.runSession(apiId, {
-            mode,
-            provider: selectedProvider,
-            model: selectedModel,
-            customPrompt: customPrompt || undefined,
-          }),
+          async () =>
+            apisApi.runSession(apiId, {
+              mode,
+              provider: selectedProvider,
+              model: selectedModel,
+              customPrompt: customPrompt || undefined,
+            }),
         );
       }
 
@@ -655,7 +724,11 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _reviewSession(apiId: string, sessionId: string, mode: "PREVIEW" | "FULL_SOURCE") {
+  private async _reviewSession(
+    apiId: string,
+    sessionId: string,
+    mode: "PREVIEW" | "FULL_SOURCE",
+  ) {
     console.log("[uigenai] _reviewSession called:", { apiId, sessionId, mode });
     if (!apiId || !sessionId) {
       vscode.window.showErrorMessage("Invalid session.");
@@ -708,6 +781,79 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     } catch (e: unknown) {
       console.error("[uigenai] _deleteApiSession error:", e);
       vscode.window.showErrorMessage(extractApiError(e));
+    }
+  }
+
+  /* ---- Quick Generate (Local Flow) ---- */
+  private async _pickOpenApiFile() {
+    const files = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "OpenAPI Files": ["yaml", "yml", "json"],
+        "All Files": ["*"],
+      },
+      title: "Select OpenAPI/Swagger File",
+    });
+
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    const filePath = files[0].fsPath;
+    try {
+      const content = await vscode.workspace.fs.readFile(files[0]);
+      const textContent = Buffer.from(content).toString("utf-8");
+      this._post("qgFileSelected", { filePath, content: textContent });
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`Failed to read file: ${e.message}`);
+    }
+  }
+
+  private async _quickGenerate(msg: {
+    apiFilePath: string;
+    apiContent: string;
+    useSkill: boolean;
+    skillName: string;
+    actionsPrompt: string;
+    designPrompt: string;
+    provider: string;
+    model: string;
+  }) {
+    console.log("[uigenai] _quickGenerate called:", {
+      file: msg.apiFilePath,
+      useSkill: msg.useSkill,
+      skillName: msg.skillName,
+      provider: msg.provider,
+      model: msg.model,
+    });
+
+    try {
+      // Import the preview generator
+      const { generatePreviewAndShow } =
+        await import("../commands/previewGenerateCommand");
+
+      // Build the state object for preview generation
+      const state = {
+        apiSpec: msg.apiContent,
+        actionsPrompt: msg.actionsPrompt || undefined,
+        designPrompt: msg.designPrompt || undefined,
+        provider: msg.provider,
+        model: msg.model,
+        apiFilePath: msg.apiFilePath,
+        useSkill: msg.useSkill,
+        skillName: msg.skillName,
+      };
+
+      // Generate preview
+      await generatePreviewAndShow(this._extensionUri as any, state);
+
+      this._post("qgStatus", { success: true, message: "Preview generated!" });
+    } catch (e: any) {
+      console.error("[uigenai] _quickGenerate error:", e);
+      vscode.window.showErrorMessage(`Quick generate failed: ${e.message}`);
+      this._post("qgStatus", { success: false, message: e.message });
     }
   }
 
@@ -787,8 +933,8 @@ button:disabled:hover{filter:none;background:inherit}
 
 /* Workflow */
 .wf{padding:10px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
-.wf-row{display:flex;align-items:center;gap:6px}
-.wf-select{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-size:11px}
+.wf-row{display:flex;align-items:center;gap:6px;width:100%}
+.wf-select{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-size:11px;min-width:0}
 .wf-select:focus{outline:1px solid var(--accent)}
 .wf-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;border:1px solid var(--border)}
 .wf-badge.ok{color:var(--ok);border-color:rgba(78,201,176,.4)}
@@ -823,6 +969,13 @@ button:disabled:hover{filter:none;background:inherit}
 .wf-session-status.queue{background:rgba(220,220,170,.15);color:var(--warn)}
 .wf-session-actions{display:flex;gap:4px;flex-shrink:0}
 .wf-session-actions button{padding:2px 6px;font-size:10px}
+
+/* Step styling for Quick Generate */
+.wf-step{margin-bottom:12px;padding:10px;background:rgba(255,255,255,.02);border-radius:6px;border:1px solid var(--border)}
+.wf-step-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.wf-step-num{width:20px;height:20px;background:var(--accent);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.wf-step-title{font-size:11px;font-weight:600;color:var(--text)}
+.wf-file-name{font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px;flex-shrink:0}
 
 /* Empty / loading */
 .empty{color:var(--text2);font-size:11px;font-style:italic;padding:4px 6px}
@@ -863,53 +1016,132 @@ ${
   </div>
   <div class="sec-body open" id="body-workflow">
     <div class="wf">
-      <div class="wf-row">
-        <select class="wf-select" id="wf-select" onchange="onSelectWorkflow(this.value)"></select>
-        <span class="wf-badge info" id="wf-state">--</span>
-      </div>
-      <div class="wf-row" style="margin-top:6px">
-        <label style="font-size:10px;color:var(--text2);min-width:55px">Provider:</label>
-        <select class="wf-select" id="wf-provider-select" style="flex:1" onchange="onProviderChange(this.value)">
-          <option value="gemini">Gemini</option>
-          <option value="groq">Groq</option>
-          <option value="openai">OpenAI</option>
-        </select>
-      </div>
-      <div class="wf-row" style="margin-top:6px">
-        <label style="font-size:10px;color:var(--text2);min-width:55px">Model:</label>
-        <select class="wf-select" id="wf-model-select" style="flex:1"></select>
-      </div>
-      <div class="wf-row" style="margin-top:6px;flex-direction:column;align-items:stretch">
-        <label style="font-size:10px;color:var(--text2);margin-bottom:4px">Custom Prompt (optional):</label>
-        <textarea id="wf-custom-prompt" rows="3" placeholder="Add specific instructions for AI... (e.g., 'Use dark theme', 'Add animations', 'Include form validation')" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px;resize:vertical;font-family:inherit"></textarea>
-      </div>
-      <div class="wf-meta" id="wf-meta">Select an API to see actions.</div>
-      <div class="wf-cta">
-        <button class="btn-p" id="wf-btn-preview" onclick="clickPreview()" disabled>Preview UI</button>
-        <button class="btn-s" id="wf-btn-full" onclick="clickFull()" disabled>Generate Full Source</button>
-        <button class="btn-s" id="wf-btn-ready" onclick="clickReady()" disabled>Mark Ready</button>
-      </div>
-
-      <!-- Sessions List -->
-      <div class="wf-sessions">
-        <div class="wf-sessions-header">
-          <h4>Preview Sessions</h4>
-          <span class="wf-sessions-count" id="wf-preview-count">0</span>
+      <!-- Step 1: Select OpenAPI File -->
+      <div class="wf-step">
+        <div class="wf-step-header">
+          <span class="wf-step-num">1</span>
+          <span class="wf-step-title">Select OpenAPI File</span>
         </div>
-        <div class="wf-sessions-list" id="wf-preview-list">
-          <div class="empty">No preview sessions yet.</div>
+        <div class="wf-row" style="flex-direction:column;align-items:stretch;gap:6px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="wf-source-mode" id="wf-source-existing" value="existing" checked onchange="onSourceModeChange()">
+            <span style="font-size:11px">From existing API</span>
+          </label>
+          <div id="wf-existing-api-row" class="wf-row">
+            <select class="wf-select" id="wf-api-select" style="flex:1" onchange="onExistingApiChange(this.value)">
+              <option value="">-- Select API --</option>
+            </select>
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:4px">
+            <input type="radio" name="wf-source-mode" id="wf-source-file" value="file" onchange="onSourceModeChange()">
+            <span style="font-size:11px">From local file</span>
+          </label>
+          <div id="wf-file-row" class="wf-row" style="display:none">
+            <button class="btn-s" style="flex:1" onclick="pickOpenApiFile()">📁 Choose File...</button>
+            <span class="wf-file-name" id="wf-file-name">No file selected</span>
+          </div>
         </div>
       </div>
 
-      <div class="wf-sessions" style="margin-top:12px">
-        <div class="wf-sessions-header">
-          <h4>Full Source Sessions</h4>
-          <span class="wf-sessions-count" id="wf-full-count">0</span>
+      <!-- Step 2: Prompt Enhancement -->
+      <div class="wf-step">
+        <div class="wf-step-header">
+          <span class="wf-step-num">2</span>
+          <span class="wf-step-title">Prompt Enhancement</span>
         </div>
-        <div class="wf-sessions-list" id="wf-full-list">
-          <div class="empty">No full source sessions yet.</div>
+        <div class="wf-row" style="flex-direction:column;align-items:stretch">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="wf-prompt-mode" id="wf-mode-skill" value="skill" checked onchange="onPromptModeChange()">
+            <span style="font-size:11px">Use Skill: <strong>ui-ux-pro-max</strong></span>
+            <span class="badge badge-ok" style="font-size:9px">Recommended</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="wf-prompt-mode" id="wf-mode-skill-custom" value="skill-custom" onchange="onPromptModeChange()">
+            <span style="font-size:11px">Manual + Enhance</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="wf-prompt-mode" id="wf-mode-manual" value="manual" onchange="onPromptModeChange()">
+            <span style="font-size:11px">Manual only</span>
+          </label>
+        </div>
+        <div class="wf-row" id="wf-skill-row" style="margin-top:6px">
+          <select class="wf-select" id="wf-skill-select" style="flex:1">
+            <option value="ui-ux-pro-max">UI/UX Pro Max (Default)</option>
+            <option value="minimal-ui">Minimal UI</option>
+            <option value="dashboard-pro">Dashboard Pro</option>
+          </select>
         </div>
       </div>
+
+      <!-- Step 3: Actions Configuration -->
+      <div class="wf-step" id="wf-step-actions" style="display:none">
+        <div class="wf-step-header">
+          <span class="wf-step-num">3</span>
+          <span class="wf-step-title">Actions Configuration</span>
+        </div>
+        <div class="wf-row" style="flex-direction:column;align-items:stretch">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="wf-actions-mode" id="wf-actions-auto" value="auto" checked>
+            <span style="font-size:11px">Auto-detect from API</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="wf-actions-mode" id="wf-actions-manual" value="manual">
+            <span style="font-size:11px">Manual prompt</span>
+          </label>
+          <textarea id="wf-actions-prompt" rows="2" placeholder="e.g., 'CRUD for products with search and pagination'" style="width:100%;padding:6px;margin-top:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px;resize:vertical;font-family:inherit;display:none"></textarea>
+        </div>
+      </div>
+
+      <!-- Step 4: Design Configuration -->
+      <div class="wf-step">
+        <div class="wf-step-header">
+          <span class="wf-step-num" id="wf-step-design-num">3</span>
+          <span class="wf-step-title">Design Configuration</span>
+        </div>
+        <div class="wf-row" id="wf-design-templates" style="flex-direction:column;align-items:stretch">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="wf-design-mode" id="wf-design-modern" value="modern" checked>
+            <span style="font-size:11px">Modern minimalist with subtle shadows</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="wf-design-mode" id="wf-design-dark" value="dark">
+            <span style="font-size:11px">Dark mode with vibrant accents</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="wf-design-mode" id="wf-design-custom" value="custom">
+            <span style="font-size:11px">Custom</span>
+          </label>
+        </div>
+        <textarea id="wf-design-prompt" rows="2" placeholder="e.g., 'Dark theme, blue accent, Tailwind CSS, mobile-first'" style="width:100%;padding:6px;margin-top:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px;resize:vertical;font-family:inherit;display:none"></textarea>
+      </div>
+
+      <!-- Step 5: AI Provider -->
+      <div class="wf-step">
+        <div class="wf-step-header">
+          <span class="wf-step-num" id="wf-step-provider-num">4</span>
+          <span class="wf-step-title">AI Provider</span>
+        </div>
+        <div class="wf-row" style="gap:8px">
+          <label style="font-size:11px;color:var(--text2);min-width:60px;flex-shrink:0">Provider:</label>
+          <select class="wf-select" id="wf-provider-select" style="flex:1;min-width:0" onchange="onProviderChange(this.value)">
+            <option value="gemini">Gemini</option>
+            <option value="groq">Groq</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <div class="wf-row" style="margin-top:8px;gap:8px">
+          <label style="font-size:11px;color:var(--text2);min-width:60px;flex-shrink:0">Model:</label>
+          <select class="wf-select" id="wf-model-select" style="flex:1;min-width:0"></select>
+        </div>
+      </div>
+
+      <!-- Generate Buttons -->
+      <div class="wf-cta" style="margin-top:12px">
+        <button class="btn-p" id="wf-btn-preview" onclick="generatePreview()" style="width:100%;padding:10px;font-size:13px">
+          🚀 Generate Preview
+        </button>
+      </div>
+      <div class="wf-meta" id="wf-status" style="text-align:center;margin-top:8px">Select an OpenAPI file to start</div>
     </div>
   </div>
 </div>
@@ -1009,7 +1241,188 @@ function onProviderChange(provider) {
   if (providerSelect) {
     onProviderChange(providerSelect.value);
   }
+  // Init prompt mode change handlers
+  onPromptModeChange();
+  initDesignModeHandlers();
+  initActionsModeHandlers();
+  onSourceModeChange();
 })();
+
+/* ---- Workflow State ---- */
+let wfSelectedFile = null;
+let wfFileContent = null;
+let wfSelectedApiId = null;
+
+function onSourceModeChange() {
+  const existingMode = document.getElementById('wf-source-existing')?.checked;
+  const existingRow = document.getElementById('wf-existing-api-row');
+  const fileRow = document.getElementById('wf-file-row');
+
+  if (existingMode) {
+    if (existingRow) existingRow.style.display = 'flex';
+    if (fileRow) fileRow.style.display = 'none';
+  } else {
+    if (existingRow) existingRow.style.display = 'none';
+    if (fileRow) fileRow.style.display = 'flex';
+  }
+}
+
+function onExistingApiChange(apiId) {
+  wfSelectedApiId = apiId || null;
+  if (!apiId) {
+    wfFileContent = null;
+    updateWfStatus('Select an API or file to start', 'var(--text2)');
+    return;
+  }
+  // Request OpenAPI document for this API
+  updateWfStatus('Loading API document...', 'var(--accent2)');
+  send('loadApiOpenApiDoc', { apiId });
+}
+
+function updateWfStatus(message, color) {
+  const statusEl = document.getElementById('wf-status');
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.style.color = color || 'var(--text2)';
+  }
+}
+
+function onPromptModeChange() {
+  const skillMode = document.getElementById('wf-mode-skill')?.checked;
+  const skillCustomMode = document.getElementById('wf-mode-skill-custom')?.checked;
+  const manualMode = document.getElementById('wf-mode-manual')?.checked;
+
+  const skillRow = document.getElementById('wf-skill-row');
+  const actionsStep = document.getElementById('wf-step-actions');
+  const designNum = document.getElementById('wf-step-design-num');
+  const providerNum = document.getElementById('wf-step-provider-num');
+
+  if (skillMode) {
+    // Use Skill only - hide skill selector, hide actions step
+    if (skillRow) skillRow.style.display = 'none';
+    if (actionsStep) actionsStep.style.display = 'none';
+    if (designNum) designNum.textContent = '3';
+    if (providerNum) providerNum.textContent = '4';
+  } else if (skillCustomMode) {
+    // Manual + Enhance - show skill selector, show actions step
+    if (skillRow) skillRow.style.display = 'flex';
+    if (actionsStep) actionsStep.style.display = 'block';
+    if (designNum) designNum.textContent = '4';
+    if (providerNum) providerNum.textContent = '5';
+  } else {
+    // Manual only - hide skill selector, show actions step
+    if (skillRow) skillRow.style.display = 'none';
+    if (actionsStep) actionsStep.style.display = 'block';
+    if (designNum) designNum.textContent = '4';
+    if (providerNum) providerNum.textContent = '5';
+  }
+}
+
+function initDesignModeHandlers() {
+  const designCustom = document.getElementById('wf-design-custom');
+  const designPrompt = document.getElementById('wf-design-prompt');
+  const radios = document.querySelectorAll('input[name="wf-design-mode"]');
+
+  radios.forEach(r => {
+    r.addEventListener('change', () => {
+      if (designPrompt) {
+        designPrompt.style.display = designCustom?.checked ? 'block' : 'none';
+      }
+    });
+  });
+}
+
+function initActionsModeHandlers() {
+  const actionsManual = document.getElementById('wf-actions-manual');
+  const actionsPrompt = document.getElementById('wf-actions-prompt');
+  const radios = document.querySelectorAll('input[name="wf-actions-mode"]');
+
+  radios.forEach(r => {
+    r.addEventListener('change', () => {
+      if (actionsPrompt) {
+        actionsPrompt.style.display = actionsManual?.checked ? 'block' : 'none';
+      }
+    });
+  });
+}
+
+function pickOpenApiFile() {
+  send('pickOpenApiFile');
+}
+
+function setWfFile(filePath, content) {
+  wfSelectedFile = filePath;
+  wfFileContent = content;
+  const nameEl = document.getElementById('wf-file-name');
+  if (nameEl) {
+    const shortName = filePath.split(/[\\\\/]/).pop() || filePath;
+    nameEl.textContent = shortName;
+    nameEl.title = filePath;
+  }
+  const statusEl = document.getElementById('wf-status');
+  if (statusEl) {
+    statusEl.textContent = 'Ready to generate!';
+    statusEl.style.color = 'var(--ok)';
+  }
+}
+
+function generatePreview() {
+  if (!wfSelectedFile || !wfFileContent) {
+    const statusEl = document.getElementById('wf-status');
+    if (statusEl) {
+      statusEl.textContent = 'Please select an OpenAPI file first';
+      statusEl.style.color = 'var(--err)';
+    }
+    return;
+  }
+
+  // Get prompt mode
+  const skillMode = document.getElementById('wf-mode-skill')?.checked;
+  const skillCustomMode = document.getElementById('wf-mode-skill-custom')?.checked;
+
+  const useSkill = skillMode || skillCustomMode;
+  const skillName = document.getElementById('wf-skill-select')?.value || 'ui-ux-pro-max';
+
+  // Get actions prompt (only if not pure skill mode)
+  let actionsPrompt = '';
+  if (!skillMode) {
+    const actionsManual = document.getElementById('wf-actions-manual')?.checked;
+    if (actionsManual) {
+      actionsPrompt = document.getElementById('wf-actions-prompt')?.value?.trim() || '';
+    }
+  }
+
+  // Get design configuration
+  let designPrompt = '';
+  const designMode = document.querySelector('input[name="wf-design-mode"]:checked')?.value;
+  if (designMode === 'modern') {
+    designPrompt = 'Modern minimalist design with subtle shadows, clean lines';
+  } else if (designMode === 'dark') {
+    designPrompt = 'Dark mode with vibrant accent colors, modern feel';
+  } else if (designMode === 'custom') {
+    designPrompt = document.getElementById('wf-design-prompt')?.value?.trim() || '';
+  }
+
+  const provider = document.getElementById('wf-provider-select')?.value || 'gemini';
+  const model = document.getElementById('wf-model-select')?.value || 'gemini-2.5-flash';
+
+  const statusEl = document.getElementById('wf-status');
+  if (statusEl) {
+    statusEl.textContent = 'Generating preview...';
+    statusEl.style.color = 'var(--accent2)';
+  }
+
+  send('quickGenerate', {
+    apiFilePath: wfSelectedFile,
+    apiContent: wfFileContent,
+    useSkill,
+    skillName,
+    actionsPrompt,
+    designPrompt,
+    provider,
+    model,
+  });
+}
 
 /* ---- Section toggle ---- */
 function toggleSec(id) {
@@ -1027,7 +1440,7 @@ function toggleSec(id) {
 function setWorkflowApis(apis) {
   workflowApis = apis || [];
   console.log('[uigenai][workflow] API list loaded', workflowApis.map(a => a.name));
-  const sel = document.getElementById('wf-select');
+  const sel = document.getElementById('wf-api-select');
   if (!sel) return;
   if (!workflowApis.length) {
     sel.innerHTML = '<option value="">No APIs yet</option>';
@@ -1035,15 +1448,12 @@ function setWorkflowApis(apis) {
     renderWorkflow(null);
     return;
   }
-  sel.innerHTML = workflowApis
+  sel.innerHTML = '<option value="">-- Select API --</option>' + workflowApis
     .map(a => \`<option value="\${a.id}">\${esc(a.name)}</option>\`)
     .join('');
-  if (!selectedApiId || !workflowApis.some(a => a.id === selectedApiId)) {
-    selectedApiId = workflowApis[0].id;
-  }
-  sel.value = selectedApiId;
-  console.log('[uigenai][workflow] selecting api', selectedApiId);
-  send('selectApi', { apiId: selectedApiId });
+  // Don't auto-select, let user choose
+  sel.value = '';
+  console.log('[uigenai][workflow] API dropdown populated with', workflowApis.length, 'APIs');
 }
 
 function onSelectWorkflow(id) {
@@ -1556,6 +1966,33 @@ window.addEventListener('message', e => {
     case 'apiWorkflow':
       console.log('[uigenai][workflow] Workflow data received for API:', data?.api?.name);
       renderWorkflow(data);
+      break;
+    case 'qgFileSelected':
+      console.log('[uigenai][workflow] File selected:', data?.filePath);
+      setWfFile(data.filePath, data.content);
+      break;
+    case 'qgStatus':
+      console.log('[uigenai][workflow] Quick Generate status:', data);
+      const statusEl = document.getElementById('qg-status');
+      if (statusEl) {
+        statusEl.textContent = data.message;
+        statusEl.style.color = data.success ? 'var(--ok)' : 'var(--err)';
+      }
+      break;
+    case 'apiOpenApiDoc':
+      console.log('[uigenai][workflow] OpenAPI doc loaded for API:', data?.apiId);
+      if (data?.content && wfSelectedApiId === data.apiId) {
+        wfSelectedFile = data.name || 'openapi.yaml';
+        wfFileContent = data.content;
+        updateWfStatus('Ready to generate!', 'var(--ok)');
+      }
+      break;
+    case 'apiOpenApiDocError':
+      console.log('[uigenai][workflow] OpenAPI doc error:', data?.error);
+      if (wfSelectedApiId === data?.apiId) {
+        wfFileContent = null;
+        updateWfStatus(data?.error || 'Failed to load API document', 'var(--err)');
+      }
       break;
   }
 });

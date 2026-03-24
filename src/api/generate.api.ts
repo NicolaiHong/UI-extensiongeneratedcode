@@ -16,6 +16,15 @@ export interface PromptTemplate {
   prompt: string;
 }
 
+export interface GeneratePreviewRequest {
+  apiSpec: string;
+  actionsPrompt?: string;
+  designPrompt?: string;
+  customPrompt?: string;
+  provider?: string;
+  model?: string;
+}
+
 export const generateApi = {
   generate: async (data: {
     prompt: string;
@@ -24,6 +33,12 @@ export const generateApi = {
     apiId?: string;
   }): Promise<GenerateResult> =>
     unwrap(await getApi().post("/api/generate", data)),
+
+  generatePreview: async (
+    data: GeneratePreviewRequest,
+  ): Promise<GenerateResult> =>
+    unwrap(await getApi().post("/api/generate/preview", data)),
+
   getTemplates: async (): Promise<PromptTemplate[]> => {
     const res = unwrap(await getApi().get("/api/generate/templates"));
     return res.templates ?? res.data ?? res;
