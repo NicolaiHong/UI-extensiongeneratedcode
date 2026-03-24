@@ -326,32 +326,52 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           console.log(
             "[uigenai] Received generatePreview message:",
             msg.apiId,
-            "sessionId:",
-            msg.sessionId,
+            "provider:",
+            msg.provider,
             "model:",
             msg.model,
+            "customPrompt:",
+            msg.customPrompt ? msg.customPrompt.substring(0, 50) + "..." : "(none)",
           );
-          await this._generateApiSession(msg.apiId, "PREVIEW", msg.sessionId, msg.model);
+          await this._generateApiSession(msg.apiId, "PREVIEW", msg.sessionId, msg.provider, msg.model, msg.customPrompt);
           break;
         case "generateFull":
           console.log(
             "[uigenai] Received generateFull message:",
             msg.apiId,
-            "sessionId:",
-            msg.sessionId,
+            "provider:",
+            msg.provider,
             "model:",
             msg.model,
+            "customPrompt:",
+            msg.customPrompt ? msg.customPrompt.substring(0, 50) + "..." : "(none)",
           );
           await this._generateApiSession(
             msg.apiId,
             "FULL_SOURCE",
             msg.sessionId,
+            msg.provider,
             msg.model,
+            msg.customPrompt,
           );
           break;
         case "markReady":
           console.log("[uigenai] Received markReady message:", msg.apiId);
           await this._markApiReady(msg.apiId);
+          break;
+
+        /* ---- Session Review/Delete ---- */
+        case "reviewPreviewSession":
+          console.log("[uigenai] Review preview session:", msg.apiId, msg.sessionId);
+          await this._reviewSession(msg.apiId, msg.sessionId, "PREVIEW");
+          break;
+        case "reviewFullSession":
+          console.log("[uigenai] Review full session:", msg.apiId, msg.sessionId);
+          await this._reviewSession(msg.apiId, msg.sessionId, "FULL_SOURCE");
+          break;
+        case "deleteApiSession":
+          console.log("[uigenai] Delete session:", msg.apiId, msg.sessionId);
+          await this._deleteApiSession(msg.apiId, msg.sessionId);
           break;
 
         /* ---- Generate ---- */
@@ -399,30 +419,48 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
         );
 
-      const preview = sortByDate(previewSessions)[0] || null;
-      const full = sortByDate(fullSessions)[0] || null;
+      const sortedPreview = sortByDate(previewSessions);
+      const sortedFull = sortByDate(fullSessions);
 
-      console.log("[uigenai] Latest preview:", preview?.id, preview?.status);
-      console.log("[uigenai] Latest full:", full?.id, full?.status);
+      console.log("[uigenai] Latest preview:", sortedPreview[0]?.id, sortedPreview[0]?.status);
+      console.log("[uigenai] Latest full:", sortedFull[0]?.id, sortedFull[0]?.status);
 
       this._post("apiWorkflow", {
         api,
-        preview: preview
+        // Keep latest for backward compatibility
+        preview: sortedPreview[0]
           ? {
-              id: preview.id,
-              status: preview.status,
-              created_at: preview.created_at,
-              project_id: preview.project_id,
+              id: sortedPreview[0].id,
+              status: sortedPreview[0].status,
+              created_at: sortedPreview[0].created_at,
+              project_id: sortedPreview[0].project_id,
             }
           : null,
-        full: full
+        full: sortedFull[0]
           ? {
-              id: full.id,
-              status: full.status,
-              created_at: full.created_at,
-              project_id: full.project_id,
+              id: sortedFull[0].id,
+              status: sortedFull[0].status,
+              created_at: sortedFull[0].created_at,
+              project_id: sortedFull[0].project_id,
             }
           : null,
+        // Send all sessions for the list view
+        allPreviewSessions: sortedPreview.map((s: any) => ({
+          id: s.id,
+          status: s.status,
+          created_at: s.created_at,
+          project_id: s.project_id,
+          provider: s.provider,
+          model: s.model,
+        })),
+        allFullSessions: sortedFull.map((s: any) => ({
+          id: s.id,
+          status: s.status,
+          created_at: s.created_at,
+          project_id: s.project_id,
+          provider: s.provider,
+          model: s.model,
+        })),
       });
     } catch (e: unknown) {
       console.error("[uigenai] _loadApiWorkflow error:", e);
@@ -434,14 +472,19 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     apiId: string,
     mode: "PREVIEW" | "FULL_SOURCE",
     reuseSessionId?: string,
+    provider?: string,
     model?: string,
+    customPrompt?: string,
   ) {
+    const selectedProvider = provider || "gemini";
     const selectedModel = model || "gemini-2.5-flash";
     console.log("[uigenai] _generateApiSession called:", {
       apiId,
       mode,
       reuseSessionId: reuseSessionId || "new",
+      provider: selectedProvider,
       model: selectedModel,
+      customPrompt: customPrompt ? customPrompt.substring(0, 50) + "..." : "(none)",
     });
     if (!apiId) {
       vscode.window.showErrorMessage("Select an API first.");
@@ -466,7 +509,12 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
                 : "Generating Full Source...",
           },
           // Use API-scoped session runner (no project required)
-          async () => apisApi.runSession(apiId, { mode, provider: "gemini", model: selectedModel }),
+          async () => apisApi.runSession(apiId, {
+            mode,
+            provider: selectedProvider,
+            model: selectedModel,
+            customPrompt: customPrompt || undefined,
+          }),
         );
       }
 
@@ -607,6 +655,62 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async _reviewSession(apiId: string, sessionId: string, mode: "PREVIEW" | "FULL_SOURCE") {
+    console.log("[uigenai] _reviewSession called:", { apiId, sessionId, mode });
+    if (!apiId || !sessionId) {
+      vscode.window.showErrorMessage("Invalid session.");
+      return;
+    }
+    try {
+      const [api, session] = await Promise.all([
+        apisApi.getById(apiId),
+        apisApi.getSession(apiId, sessionId),
+      ]);
+
+      if (mode === "PREVIEW") {
+        showPreviewReviewPanel({
+          apiName: api.name,
+          session,
+          onGenerateFull: () => this._generateApiSession(api.id, "FULL_SOURCE"),
+          onRegenerate: () => this._generateApiSession(api.id, "PREVIEW"),
+        });
+      } else {
+        await showSessionReviewPanel(api.project_id || "", sessionId, {
+          apiId: api.id,
+          enableMarkReady: true,
+          onMarkedReady: () => this._loadApiWorkflow(api.id),
+        });
+      }
+    } catch (e: unknown) {
+      console.error("[uigenai] _reviewSession error:", e);
+      vscode.window.showErrorMessage(extractApiError(e));
+    }
+  }
+
+  private async _deleteApiSession(apiId: string, sessionId: string) {
+    console.log("[uigenai] _deleteApiSession called:", { apiId, sessionId });
+    if (!apiId || !sessionId) {
+      vscode.window.showErrorMessage("Invalid session.");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      "Delete this session? This cannot be undone.",
+      { modal: true },
+      "Delete",
+    );
+    if (confirm !== "Delete") {
+      return;
+    }
+    try {
+      await apisApi.deleteSession(apiId, sessionId);
+      vscode.window.showInformationMessage("Session deleted.");
+      await this._loadApiWorkflow(apiId);
+    } catch (e: unknown) {
+      console.error("[uigenai] _deleteApiSession error:", e);
+      vscode.window.showErrorMessage(extractApiError(e));
+    }
+  }
+
   private _post(type: string, data: any) {
     this._view?.webview.postMessage({ type, data });
   }
@@ -700,6 +804,26 @@ button:disabled:hover{filter:none;background:inherit}
 .wf-card .sub{font-size:10px;color:var(--text2)}
 .wf-inline{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--text2)}
 
+/* Sessions List */
+.wf-sessions{background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.wf-sessions-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(255,255,255,.02);border-bottom:1px solid var(--border)}
+.wf-sessions-header h4{font-size:11px;font-weight:600;color:var(--text);margin:0}
+.wf-sessions-count{font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:10px;font-weight:600}
+.wf-sessions-list{max-height:200px;overflow-y:auto}
+.wf-session-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px}
+.wf-session-item:last-child{border-bottom:none}
+.wf-session-item:hover{background:rgba(255,255,255,.03)}
+.wf-session-info{flex:1;min-width:0}
+.wf-session-model{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-session-date{font-size:10px;color:var(--text2)}
+.wf-session-status{font-size:9px;padding:2px 6px;border-radius:8px;font-weight:600;text-transform:uppercase;flex-shrink:0}
+.wf-session-status.ok{background:rgba(78,201,176,.15);color:var(--ok)}
+.wf-session-status.err{background:rgba(244,71,71,.15);color:var(--err)}
+.wf-session-status.run{background:rgba(0,122,204,.15);color:var(--accent2)}
+.wf-session-status.queue{background:rgba(220,220,170,.15);color:var(--warn)}
+.wf-session-actions{display:flex;gap:4px;flex-shrink:0}
+.wf-session-actions button{padding:2px 6px;font-size:10px}
+
 /* Empty / loading */
 .empty{color:var(--text2);font-size:11px;font-style:italic;padding:4px 6px}
 .spin{display:inline-block;animation:sp .8s linear infinite}
@@ -772,16 +896,20 @@ ${
         <span class="wf-badge info" id="wf-state">--</span>
       </div>
       <div class="wf-row" style="margin-top:6px">
-        <label style="font-size:10px;color:var(--text2);min-width:45px">Model:</label>
-        <select class="wf-select" id="wf-model-select" style="flex:1">
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended)</option>
-          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-          <option value="gemini-2.0-flash-001">Gemini 2.0 Flash 001</option>
-          <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
-          <option value="gemini-2.0-flash-lite-001">Gemini 2.0 Flash-Lite 001</option>
+        <label style="font-size:10px;color:var(--text2);min-width:55px">Provider:</label>
+        <select class="wf-select" id="wf-provider-select" style="flex:1" onchange="onProviderChange(this.value)">
+          <option value="gemini">Gemini</option>
+          <option value="groq">Groq</option>
+          <option value="openai">OpenAI</option>
         </select>
+      </div>
+      <div class="wf-row" style="margin-top:6px">
+        <label style="font-size:10px;color:var(--text2);min-width:55px">Model:</label>
+        <select class="wf-select" id="wf-model-select" style="flex:1"></select>
+      </div>
+      <div class="wf-row" style="margin-top:6px;flex-direction:column;align-items:stretch">
+        <label style="font-size:10px;color:var(--text2);margin-bottom:4px">Custom Prompt (optional):</label>
+        <textarea id="wf-custom-prompt" rows="3" placeholder="Add specific instructions for AI... (e.g., 'Use dark theme', 'Add animations', 'Include form validation')" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px;resize:vertical;font-family:inherit"></textarea>
       </div>
       <div class="wf-meta" id="wf-meta">Select an API to see actions.</div>
       <div class="wf-cta">
@@ -789,18 +917,25 @@ ${
         <button class="btn-s" id="wf-btn-full" onclick="clickFull()" disabled>Generate Full Source</button>
         <button class="btn-s" id="wf-btn-ready" onclick="clickReady()" disabled>Mark Ready</button>
       </div>
-      <div class="wf-cards">
-        <div class="wf-card">
-          <h4>Preview</h4>
-          <div class="sub" id="wf-preview-status">No preview run.</div>
-          <div class="wf-inline" id="wf-preview-meta"></div>
-          <button class="btn-s" style="width:100%;margin-top:6px" onclick="reviewPreview()" id="wf-preview-view" disabled>Review Preview</button>
+
+      <!-- Sessions List -->
+      <div class="wf-sessions">
+        <div class="wf-sessions-header">
+          <h4>Preview Sessions</h4>
+          <span class="wf-sessions-count" id="wf-preview-count">0</span>
         </div>
-        <div class="wf-card">
-          <h4>Full Source</h4>
-          <div class="sub" id="wf-full-status">No full run.</div>
-          <div class="wf-inline" id="wf-full-meta"></div>
-          <button class="btn-s" style="width:100%;margin-top:6px" onclick="reviewFull()" id="wf-full-view" disabled>Review Full Source</button>
+        <div class="wf-sessions-list" id="wf-preview-list">
+          <div class="empty">No preview sessions yet.</div>
+        </div>
+      </div>
+
+      <div class="wf-sessions" style="margin-top:12px">
+        <div class="wf-sessions-header">
+          <h4>Full Source Sessions</h4>
+          <span class="wf-sessions-count" id="wf-full-count">0</span>
+        </div>
+        <div class="wf-sessions-list" id="wf-full-list">
+          <div class="empty">No full source sessions yet.</div>
         </div>
       </div>
     </div>
@@ -870,6 +1005,55 @@ let selectedApiId = null;
 let workflowApis = [];
 let workflowLatest = { preview: null, full: null };
 
+/* ---- Provider/Model Configuration ---- */
+const providerModels = {
+  gemini: [
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recommended)' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { value: 'gemini-2.0-flash-001', label: 'Gemini 2.0 Flash 001' },
+    { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
+    { value: 'gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash-Lite 001' },
+  ],
+  groq: [
+    { value: 'llama-3.3-70b-versatile', label: 'LLaMA 3.3 70B Versatile (Recommended)' },
+    { value: 'llama-3.1-70b-versatile', label: 'LLaMA 3.1 70B Versatile' },
+    { value: 'llama-3.1-8b-instant', label: 'LLaMA 3.1 8B Instant' },
+    { value: 'llama3-70b-8192', label: 'LLaMA 3 70B' },
+    { value: 'llama3-8b-8192', label: 'LLaMA 3 8B' },
+    { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+    { value: 'gemma2-9b-it', label: 'Gemma 2 9B' },
+    { value: 'qwen-qwq-32b', label: 'Qwen QwQ 32B' },
+    { value: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 Distill LLaMA 70B' },
+  ],
+  openai: [
+    { value: 'gpt-4o', label: 'GPT-4o (Recommended)' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    { value: 'gpt-4', label: 'GPT-4' },
+    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+  ],
+};
+
+function onProviderChange(provider) {
+  const modelSelect = document.getElementById('wf-model-select');
+  if (!modelSelect) return;
+  const models = providerModels[provider] || [];
+  modelSelect.innerHTML = models.map(m =>
+    \`<option value="\${m.value}">\${esc(m.label)}</option>\`
+  ).join('');
+  console.log('[uigenai][workflow] Provider changed to', provider, '- loaded', models.length, 'models');
+}
+
+// Initialize model list on page load
+(function initModels() {
+  const providerSelect = document.getElementById('wf-provider-select');
+  if (providerSelect) {
+    onProviderChange(providerSelect.value);
+  }
+})();
+
 /* ---- Section toggle ---- */
 function toggleSec(id) {
   const b = document.getElementById('body-' + id);
@@ -935,12 +1119,10 @@ function renderWorkflow(payload) {
   const btnPreview = document.getElementById('wf-btn-preview');
   const btnFull = document.getElementById('wf-btn-full');
   const btnReady = document.getElementById('wf-btn-ready');
-  const pvStatus = document.getElementById('wf-preview-status');
-  const pvMeta = document.getElementById('wf-preview-meta');
-  const pvBtn = document.getElementById('wf-preview-view');
-  const fsStatus = document.getElementById('wf-full-status');
-  const fsMeta = document.getElementById('wf-full-meta');
-  const fsBtn = document.getElementById('wf-full-view');
+  const previewList = document.getElementById('wf-preview-list');
+  const fullList = document.getElementById('wf-full-list');
+  const previewCount = document.getElementById('wf-preview-count');
+  const fullCount = document.getElementById('wf-full-count');
 
   console.log('[uigenai][workflow] renderWorkflow called with payload:', payload);
 
@@ -951,16 +1133,16 @@ function renderWorkflow(payload) {
       stateEl.className = "wf-badge info";
     }
     if (metaEl) metaEl.textContent = "Select an API to see actions.";
-    [btnPreview, btnFull, btnReady, pvBtn, fsBtn].forEach((b) => {
+    [btnPreview, btnFull, btnReady].forEach((b) => {
       if (b) {
         b.disabled = true;
         b.title = "Select an API first.";
       }
     });
-    if (pvStatus) pvStatus.textContent = "No preview run.";
-    if (pvMeta) pvMeta.textContent = "";
-    if (fsStatus) fsStatus.textContent = "No full run.";
-    if (fsMeta) fsMeta.textContent = "";
+    if (previewList) previewList.innerHTML = '<div class="empty">No preview sessions yet.</div>';
+    if (fullList) fullList.innerHTML = '<div class="empty">No full source sessions yet.</div>';
+    if (previewCount) previewCount.textContent = '0';
+    if (fullCount) fullCount.textContent = '0';
     workflowLatest = { preview: null, full: null };
     return;
   }
@@ -971,8 +1153,6 @@ function renderWorkflow(payload) {
   }
 
   console.log('[uigenai][workflow] Processing workflow for API:', payload.api.name, 'state:', payload.api.workflow_state);
-  console.log('[uigenai][workflow] Preview session:', payload.preview);
-  console.log('[uigenai][workflow] Full session:', payload.full);
 
   workflowLatest = { preview: payload.preview, full: payload.full };
 
@@ -1000,72 +1180,66 @@ function renderWorkflow(payload) {
     Boolean(payload.full) &&
     payload.full.status === "SUCCEEDED";
 
-  console.log('[uigenai][workflow] Button states:', {
-    previewReady,
-    fullReady,
-    markReadyReady,
-    previewSession: payload.preview?.status,
-    fullSession: payload.full?.status,
-    workflowState: payload.api.workflow_state
-  });
-
   if (btnPreview) {
     btnPreview.disabled = !previewReady;
     btnPreview.title = previewReady ? "Generate a UI preview for this API" : "Select an API first.";
-    console.log('[uigenai][workflow] Preview UI button:', previewReady ? 'ENABLED' : 'DISABLED');
   }
   if (btnFull) {
     btnFull.disabled = !fullReady;
     btnFull.title = fullReady
       ? "Generate full source code from the preview"
       : \`Disabled: \${!payload.preview ? 'No preview session exists' : 'Preview status is ' + payload.preview.status + ' (needs SUCCEEDED)'}\`;
-    console.log('[uigenai][workflow] Generate Full button:', fullReady ? 'ENABLED' : 'DISABLED -', btnFull.title);
   }
   if (btnReady) {
     btnReady.disabled = !markReadyReady;
-    const reasons = [];
-    if (payload.api.workflow_state !== "CODE_GENERATED") reasons.push(\`workflow state is \${payload.api.workflow_state || 'CONFIGURED'} (needs CODE_GENERATED)\`);
-    if (!payload.full) reasons.push('no full source session exists');
-    else if (payload.full.status !== "SUCCEEDED") reasons.push(\`full source status is \${payload.full.status} (needs SUCCEEDED)\`);
-    btnReady.title = markReadyReady
-      ? "Mark this API as ready to deploy"
-      : \`Disabled: \${reasons.join(', ')}\`;
-    console.log('[uigenai][workflow] Mark Ready button:', markReadyReady ? 'ENABLED' : 'DISABLED -', btnReady.title);
+    btnReady.title = markReadyReady ? "Mark this API as ready to deploy" : "Run a successful full source generation first";
   }
 
-  if (pvStatus)
-    pvStatus.textContent = payload.preview
-      ? \`Latest: \${payload.preview.status}\`
-      : "No preview run.";
-  if (pvMeta)
-    pvMeta.textContent = payload.preview
-      ? new Date(payload.preview.created_at).toLocaleString()
-      : "";
-  if (pvBtn) {
-    const canReview = payload.preview && payload.preview.status === "SUCCEEDED";
-    pvBtn.disabled = !canReview;
-    pvBtn.title = canReview
-      ? "Open the preview session for review"
-      : \`Disabled: \${!payload.preview ? 'No preview session exists' : 'Preview status is ' + payload.preview.status + ' (needs SUCCEEDED)'}\`;
-    console.log('[uigenai][workflow] Review Preview button:', canReview ? 'ENABLED' : 'DISABLED');
+  // Render sessions lists
+  const allPreview = payload.allPreviewSessions || [];
+  const allFull = payload.allFullSessions || [];
+
+  if (previewCount) previewCount.textContent = allPreview.length;
+  if (fullCount) fullCount.textContent = allFull.length;
+
+  if (previewList) {
+    if (allPreview.length === 0) {
+      previewList.innerHTML = '<div class="empty">No preview sessions yet.</div>';
+    } else {
+      previewList.innerHTML = allPreview.map(s => renderSessionItem(s, 'PREVIEW')).join('');
+    }
   }
 
-  if (fsStatus)
-    fsStatus.textContent = payload.full
-      ? \`Latest: \${payload.full.status}\`
-      : "No full run.";
-  if (fsMeta)
-    fsMeta.textContent = payload.full
-      ? new Date(payload.full.created_at).toLocaleString()
-      : "";
-  if (fsBtn) {
-    const canReviewFull = payload.full && payload.full.status === "SUCCEEDED";
-    fsBtn.disabled = !canReviewFull;
-    fsBtn.title = canReviewFull
-      ? "Open the full source session for review"
-      : \`Disabled: \${!payload.full ? 'No full source session exists' : 'Full source status is ' + payload.full.status + ' (needs SUCCEEDED)'}\`;
-    console.log('[uigenai][workflow] Review Full Source button:', canReviewFull ? 'ENABLED' : 'DISABLED');
+  if (fullList) {
+    if (allFull.length === 0) {
+      fullList.innerHTML = '<div class="empty">No full source sessions yet.</div>';
+    } else {
+      fullList.innerHTML = allFull.map(s => renderSessionItem(s, 'FULL_SOURCE')).join('');
+    }
   }
+}
+
+function renderSessionItem(session, mode) {
+  const statusClass = session.status === 'SUCCEEDED' ? 'ok'
+    : session.status === 'FAILED' ? 'err'
+    : session.status === 'RUNNING' ? 'run'
+    : 'queue';
+  const date = new Date(session.created_at).toLocaleString();
+  const model = session.model || 'unknown';
+  const provider = session.provider || 'unknown';
+  const canReview = session.status === 'SUCCEEDED';
+
+  return \`<div class="wf-session-item">
+    <div class="wf-session-info">
+      <div class="wf-session-model">\${esc(provider)} / \${esc(model)}</div>
+      <div class="wf-session-date">\${esc(date)}</div>
+    </div>
+    <span class="wf-session-status \${statusClass}">\${esc(session.status)}</span>
+    <div class="wf-session-actions">
+      <button class="btn-s" onclick="reviewSession('\${session.id}', '\${mode}')" \${canReview ? '' : 'disabled'} title="\${canReview ? 'Review this session' : 'Session not completed'}">View</button>
+      <button class="btn-d" onclick="deleteSession('\${session.id}')" title="Delete this session">Del</button>
+    </div>
+  </div>\`;
 }
 
 function setWorkflowMessage(msg) {
@@ -1073,9 +1247,19 @@ function setWorkflowMessage(msg) {
   if (metaEl) metaEl.textContent = msg;
 }
 
+function getSelectedProvider() {
+  const sel = document.getElementById('wf-provider-select');
+  return sel ? sel.value : 'gemini';
+}
+
 function getSelectedModel() {
   const sel = document.getElementById('wf-model-select');
   return sel ? sel.value : 'gemini-2.5-flash';
+}
+
+function getCustomPrompt() {
+  const el = document.getElementById('wf-custom-prompt');
+  return el ? el.value.trim() : '';
 }
 
 function clickPreview() {
@@ -1084,7 +1268,7 @@ function clickPreview() {
     setWorkflowMessage("Select an API first.");
     return;
   }
-  send('generatePreview', { apiId: selectedApiId, model: getSelectedModel() });
+  send('generatePreview', { apiId: selectedApiId, provider: getSelectedProvider(), model: getSelectedModel(), customPrompt: getCustomPrompt() });
 }
 
 function clickFull() {
@@ -1096,7 +1280,7 @@ function clickFull() {
     setWorkflowMessage("Run a successful Preview UI first.");
     return;
   }
-  send('generateFull', { apiId: selectedApiId, model: getSelectedModel() });
+  send('generateFull', { apiId: selectedApiId, provider: getSelectedProvider(), model: getSelectedModel(), customPrompt: getCustomPrompt() });
 }
 
 function clickReady() {
@@ -1111,27 +1295,42 @@ function clickReady() {
   send('markReady', { apiId: selectedApiId });
 }
 
+function reviewSession(sessionId, mode) {
+  console.log('[uigenai][workflow] Review session click', sessionId, mode);
+  if (!sessionId || !selectedApiId) {
+    setWorkflowMessage("Select an API first.");
+    return;
+  }
+  if (mode === 'PREVIEW') {
+    send('reviewPreviewSession', { apiId: selectedApiId, sessionId: sessionId });
+  } else {
+    send('reviewFullSession', { apiId: selectedApiId, sessionId: sessionId });
+  }
+}
+
+function deleteSession(sessionId) {
+  console.log('[uigenai][workflow] Delete session click', sessionId);
+  if (!sessionId || !selectedApiId) {
+    setWorkflowMessage("Select an API first.");
+    return;
+  }
+  send('deleteApiSession', { apiId: selectedApiId, sessionId: sessionId });
+}
+
+// Keep old functions for backward compatibility
 function reviewPreview() {
-  console.log('[uigenai][workflow] Review preview click', workflowLatest.preview);
   if (!workflowLatest.preview || workflowLatest.preview.status !== "SUCCEEDED") {
     setWorkflowMessage("No successful preview session to review.");
     return;
   }
-  send('generatePreview', {
-    apiId: selectedApiId,
-    sessionId: workflowLatest.preview.id,
-  });
+  reviewSession(workflowLatest.preview.id, 'PREVIEW');
 }
 function reviewFull() {
-  console.log('[uigenai][workflow] Review full click', workflowLatest.full);
   if (!workflowLatest.full || workflowLatest.full.status !== "SUCCEEDED") {
     setWorkflowMessage("No successful full-source session to review.");
     return;
   }
-  send('generateFull', {
-    apiId: selectedApiId,
-    sessionId: workflowLatest.full.id,
-  });
+  reviewSession(workflowLatest.full.id, 'FULL_SOURCE');
 }
 
 /* ---- Status badge helper ---- */

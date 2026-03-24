@@ -78,6 +78,7 @@ export const apisApi = {
       framework?: string;
       cssStrategy?: string;
       mode?: "PREVIEW" | "FULL_SOURCE";
+      customPrompt?: string;
     },
   ): Promise<Session> =>
     unwrap(await getApi().post(`/api/apis/${id}/sessions/run`, data)),
@@ -85,4 +86,9 @@ export const apisApi = {
   /** Get a specific session for this API */
   getSession: async (id: string, sessionId: string): Promise<Session> =>
     unwrap(await getApi().get(`/api/apis/${id}/sessions/${sessionId}`)),
+
+  /** Delete a specific session for this API */
+  deleteSession: async (id: string, sessionId: string): Promise<void> => {
+    await getApi().delete(`/api/apis/${id}/sessions/${sessionId}`);
+  },
 };
