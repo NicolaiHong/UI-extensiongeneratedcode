@@ -468,6 +468,20 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           await this._deleteApiSession(msg.apiId, msg.sessionId);
           break;
 
+        /* ---- Inline Session Preview ---- */
+        case "loadSessionInline":
+          console.log(
+            "[uigenai] Load session inline:",
+            msg.sessionId,
+            msg.mode,
+          );
+          await this._loadSessionInline(msg.apiId, msg.sessionId, msg.mode);
+          break;
+        case "applySessionFiles":
+          console.log("[uigenai] Apply session files:", msg.sessionId);
+          await this._applySessionFiles(msg.files);
+          break;
+
         /* ---- Generate ---- */
         case "generate":
           vscode.commands.executeCommand("uigenai.generate");
@@ -828,6 +842,113 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /* ---- Inline Session Preview ---- */
+  private async _loadSessionInline(
+    apiId: string,
+    sessionId: string,
+    mode: "PREVIEW" | "FULL_SOURCE",
+  ) {
+    console.log("[uigenai] _loadSessionInline called:", {
+      apiId,
+      sessionId,
+      mode,
+    });
+    if (!apiId || !sessionId) {
+      vscode.window.showErrorMessage("Invalid session.");
+      return;
+    }
+    try {
+      const session = await apisApi.getSession(apiId, sessionId);
+      const rawOutput = session.output_summary_md || "";
+
+      // Import parseSessionOutputToFiles for extracting files
+      const { parseSessionOutputToFiles } =
+        await import("../utils/previewPanel").catch(() => ({
+          parseSessionOutputToFiles: (md: string) => [] as any[],
+        }));
+
+      // Parse files from output
+      const files = parseSessionOutputToFiles
+        ? parseSessionOutputToFiles(rawOutput)
+        : [];
+
+      // For preview mode, also extract HTML
+      let html = "";
+      if (mode === "PREVIEW") {
+        // Try to extract HTML from the output
+        const { extractHtmlFromOutput: extractHtml } =
+          await import("../utils/apiWorkflowPanels").catch(() => ({
+            extractHtmlFromOutput: undefined,
+          }));
+        if (extractHtml) {
+          const result = extractHtml(rawOutput);
+          html = result.html;
+        } else {
+          // Fallback: try to parse as JSON and get HTML
+          try {
+            const parsed = JSON.parse(rawOutput);
+            html =
+              parsed.codeContent ||
+              parsed.html ||
+              parsed.files?.[0]?.codeContent ||
+              rawOutput;
+          } catch {
+            html = rawOutput;
+          }
+        }
+      }
+
+      this._post("inlineSessionData", {
+        sessionId,
+        mode,
+        provider: session.provider,
+        model: session.model,
+        status: session.status,
+        html,
+        files: files.map((f: any) => ({
+          path: f.path,
+          content: f.content,
+          lang: f.lang,
+          lines: f.lines,
+        })),
+        rawOutput,
+      });
+    } catch (e: unknown) {
+      console.error("[uigenai] _loadSessionInline error:", e);
+      vscode.window.showErrorMessage(extractApiError(e));
+    }
+  }
+
+  private async _applySessionFiles(files: any[]) {
+    console.log("[uigenai] _applySessionFiles called:", files?.length, "files");
+    if (!files || files.length === 0) {
+      vscode.window.showWarningMessage("No files to apply.");
+      return;
+    }
+
+    try {
+      const { applyFiles, buildApplyResultMessage } =
+        await import("../utils/previewPanel");
+      const result = await applyFiles(
+        files.map((f: any) => ({
+          path: f.path,
+          content: f.content,
+          lang: f.lang || "FILE",
+          lines: f.lines || f.content.split("\n").length,
+        })),
+      );
+      const status = buildApplyResultMessage(result, files.length);
+      if (status.level === "success") {
+        vscode.window.showInformationMessage(status.message);
+      } else {
+        vscode.window.showErrorMessage(status.message);
+      }
+    } catch (e: unknown) {
+      console.error("[uigenai] _applySessionFiles error:", e);
+      vscode.window.showErrorMessage(`Apply failed: ${extractApiError(e)}`);
+    }
+  }
+
   /* ---- Quick Generate (Local Flow) ---- */
   private async _pickOpenApiFile() {
     const files = await vscode.window.showOpenDialog({
@@ -1025,6 +1146,27 @@ button:disabled:hover{filter:none;background:inherit}
 .wf-session-actions{display:flex;gap:4px;flex-shrink:0}
 .wf-session-actions button{padding:2px 6px;font-size:10px}
 
+/* Inline Preview Pane */
+.inline-preview-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,162,173,.1);border:1px solid rgba(0,162,173,.3);border-radius:6px 6px 0 0}
+.inline-preview-title{font-size:12px;font-weight:600;color:var(--accent)}
+.inline-preview-actions{display:flex;gap:4px}
+.inline-preview-actions button{padding:3px 8px;font-size:10px}
+.inline-preview-tabs{display:flex;gap:0;background:rgba(255,255,255,.05);border-left:1px solid var(--border);border-right:1px solid var(--border)}
+.inline-tab{flex:1;padding:6px 8px;border:none;background:transparent;color:var(--text2);font-size:10px;font-weight:600;cursor:pointer;transition:.15s}
+.inline-tab:hover{background:rgba(255,255,255,.05)}
+.inline-tab.active{background:var(--accent);color:#fff}
+.inline-preview-content{border:1px solid var(--border);border-top:none;border-radius:0 0 6px 6px;overflow:hidden}
+.inline-pane{padding:8px}
+.inline-tree-item{display:flex;align-items:center;gap:6px;padding:4px 6px;font-size:11px;cursor:pointer;border-radius:4px}
+.inline-tree-item:hover{background:rgba(255,255,255,.05)}
+.inline-tree-item.selected{background:rgba(0,162,173,.2)}
+.inline-tree-file{padding-left:20px}
+.inline-tree-folder{font-weight:600}
+.inline-file-viewer{margin-top:8px;background:rgba(0,0,0,.2);border-radius:4px;overflow:hidden}
+.inline-file-header{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--border)}
+.inline-file-name{font-size:11px;font-weight:600;color:var(--text)}
+.inline-file-content{padding:10px;font-family:'Cascadia Code','Fira Code',monospace;font-size:10px;max-height:200px;overflow:auto;white-space:pre;line-height:1.5}
+
 /* Step styling for Quick Generate */
 .wf-step{margin-bottom:12px;padding:10px;background:rgba(255,255,255,.02);border-radius:6px;border:1px solid var(--border)}
 .wf-step-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
@@ -1201,6 +1343,66 @@ ${
   </div>
 </div>
 
+<!-- Session History Section -->
+<div class="section" id="sec-sessions">
+  <div class="sec-hd" onclick="toggleSec('sessions')">
+    <h3>Session History</h3>
+    <span class="arrow open" id="arrow-sessions">&#9654;</span>
+  </div>
+  <div class="sec-body open" id="body-sessions">
+    <div class="session-tip" style="margin-bottom:8px;padding:8px;background:rgba(0,162,173,.1);border:1px solid rgba(0,162,173,.2);border-radius:4px;font-size:10px;color:var(--text2)">
+      💡 <strong>Tip:</strong> Select "From existing API" and choose an API to save sessions to history.
+    </div>
+    <!-- Preview Sessions -->
+    <div class="wf-sessions" style="margin-bottom:10px">
+      <div class="wf-sessions-header">
+        <h4>🎨 Preview Sessions</h4>
+        <span class="wf-sessions-count" id="wf-preview-count">0</span>
+      </div>
+      <div class="wf-sessions-list" id="wf-preview-list">
+        <div class="empty">Select an API to view sessions.</div>
+      </div>
+    </div>
+    <!-- Full Source Sessions -->
+    <div class="wf-sessions">
+      <div class="wf-sessions-header">
+        <h4>📦 Full Source Sessions</h4>
+        <span class="wf-sessions-count" id="wf-full-count">0</span>
+      </div>
+      <div class="wf-sessions-list" id="wf-full-list">
+        <div class="empty">Select an API to view full source sessions.</div>
+      </div>
+    </div>
+    <!-- Inline Preview Pane -->
+    <div id="inline-preview-pane" style="display:none;margin-top:12px">
+      <div class="inline-preview-header">
+        <div class="inline-preview-title" id="inline-preview-title">Preview</div>
+        <div class="inline-preview-actions">
+          <button class="btn-s" onclick="copyInlinePreview()" title="Copy HTML">📋 Copy</button>
+          <button class="btn-s" onclick="applyInlinePreview()" title="Apply to workspace">📁 Apply</button>
+          <button class="btn-s" onclick="closeInlinePreview()" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="inline-preview-tabs">
+        <button class="inline-tab active" onclick="switchInlineTab('render')" id="inline-tab-render">Rendered</button>
+        <button class="inline-tab" onclick="switchInlineTab('code')" id="inline-tab-code">Code</button>
+        <button class="inline-tab" onclick="switchInlineTab('tree')" id="inline-tab-tree">Source Tree</button>
+      </div>
+      <div class="inline-preview-content">
+        <div id="inline-render-pane" class="inline-pane">
+          <iframe id="inline-preview-iframe" sandbox="allow-scripts" style="width:100%;height:300px;border:none;background:#fff;border-radius:4px"></iframe>
+        </div>
+        <div id="inline-code-pane" class="inline-pane" style="display:none">
+          <pre id="inline-code-content" style="margin:0;padding:10px;font-size:11px;max-height:300px;overflow:auto;background:rgba(0,0,0,.2);border-radius:4px;white-space:pre-wrap;word-break:break-all"></pre>
+        </div>
+        <div id="inline-tree-pane" class="inline-pane" style="display:none">
+          <div id="inline-tree-content" style="max-height:300px;overflow:auto"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- APIs Section -->
 <div class="section" id="sec-apis">
   <div class="sec-hd" onclick="toggleSec('apis')">
@@ -1363,14 +1565,24 @@ function onSourceModeChange() {
 
 function onExistingApiChange(apiId) {
   wfSelectedApiId = apiId || null;
+  selectedApiId = apiId || null; // Also set global selectedApiId for session history
   if (!apiId) {
     wfFileContent = null;
     updateWfStatus('Select an API or file to start', 'var(--text2)');
+    // Clear session lists when no API selected
+    const previewList = document.getElementById('wf-preview-list');
+    const fullList = document.getElementById('wf-full-list');
+    if (previewList) previewList.innerHTML = '<div class="empty">Select an API to view preview sessions.</div>';
+    if (fullList) fullList.innerHTML = '<div class="empty">Select an API to view full source sessions.</div>';
+    document.getElementById('wf-preview-count').textContent = '0';
+    document.getElementById('wf-full-count').textContent = '0';
     return;
   }
   // Request OpenAPI document for this API
   updateWfStatus('Loading API document...', 'var(--accent2)');
   send('loadApiOpenApiDoc', { apiId });
+  // Also load workflow data (including sessions) for this API
+  send('selectApi', { apiId });
 }
 
 function updateWfStatus(message, color) {
@@ -1461,6 +1673,91 @@ function setWfFile(filePath, content) {
 }
 
 function generatePreview() {
+  // Check if using existing API mode
+  const existingApiMode = document.getElementById('wf-source-existing')?.checked;
+
+  if (existingApiMode) {
+    // Use session-based flow for existing APIs (will save session history)
+    const apiId = wfSelectedApiId;
+    if (!apiId) {
+      const statusEl = document.getElementById('wf-status');
+      if (statusEl) {
+        statusEl.textContent = 'Please select an API first';
+        statusEl.style.color = 'var(--err)';
+      }
+      return;
+    }
+
+    const provider = document.getElementById('wf-provider-select')?.value || 'gemini';
+    const model = document.getElementById('wf-model-select')?.value || 'gemini-2.5-flash';
+
+    // Get prompt mode settings
+    const skillMode = document.getElementById('wf-mode-skill')?.checked;
+    const skillCustomMode = document.getElementById('wf-mode-skill-custom')?.checked;
+    const manualMode = document.getElementById('wf-mode-manual')?.checked;
+
+    let customPrompt = '';
+    let useSkill = false;
+    let skillName = '';
+
+    if (skillMode || skillCustomMode) {
+      // Use skill-based prompt
+      useSkill = true;
+      skillName = document.getElementById('wf-skill-select')?.value || 'ui-ux-pro-max';
+
+      if (skillCustomMode) {
+        // Skill + custom actions
+        const actionsPrompt = document.getElementById('wf-actions-prompt')?.value?.trim() || '';
+        if (actionsPrompt) {
+          customPrompt = actionsPrompt;
+        }
+      }
+    } else if (manualMode) {
+      // Manual mode - use custom prompt
+      const actionsPrompt = document.getElementById('wf-actions-prompt')?.value?.trim() || '';
+      customPrompt = actionsPrompt;
+    }
+
+    // Add design configuration to prompt
+    const designMode = document.querySelector('input[name="wf-design-mode"]:checked')?.value;
+    let designPrompt = '';
+    if (designMode === 'modern') {
+      designPrompt = 'Design Style: Modern minimalist with subtle shadows, clean lines, professional look.';
+    } else if (designMode === 'dark') {
+      designPrompt = 'Design Style: Dark mode with vibrant accent colors (#00A2AD cyan accents), modern feel.';
+    } else if (designMode === 'custom') {
+      const customDesign = document.getElementById('wf-design-prompt')?.value?.trim() || '';
+      if (customDesign) {
+        designPrompt = 'Design Style: ' + customDesign;
+      }
+    }
+
+    // Combine prompts
+    if (designPrompt) {
+      customPrompt = customPrompt ? customPrompt + '\\n\\n' + designPrompt : designPrompt;
+    }
+
+    const statusEl = document.getElementById('wf-status');
+    if (statusEl) {
+      statusEl.textContent = 'Generating preview (session will be saved)...';
+      statusEl.style.color = 'var(--accent2)';
+    }
+
+    console.log('[uigenai][workflow] Generate preview with:', { apiId, provider, model, useSkill, skillName, customPrompt: customPrompt?.substring(0, 100) });
+
+    // Use session-based generation
+    send('generatePreview', {
+      apiId,
+      provider,
+      model,
+      customPrompt: customPrompt.trim() || undefined,
+      useSkill,
+      skillName: useSkill ? skillName : undefined,
+    });
+    return;
+  }
+
+  // Local file mode - use quick generate (no session saved)
   if (!wfSelectedFile || !wfFileContent) {
     const statusEl = document.getElementById('wf-status');
     if (statusEl) {
@@ -1502,7 +1799,7 @@ function generatePreview() {
 
   const statusEl = document.getElementById('wf-status');
   if (statusEl) {
-    statusEl.textContent = 'Generating preview...';
+    statusEl.textContent = 'Generating preview (local file - not saved to history)...';
     statusEl.style.color = 'var(--accent2)';
   }
 
@@ -1527,6 +1824,12 @@ function toggleSec(id) {
   if (open) {
     if (id === 'apis') send('loadApis');
     if (id === 'workflow') send('loadApis');
+    if (id === 'sessions') {
+      // Refresh sessions if an API is selected
+      if (selectedApiId) {
+        send('selectApi', { apiId: selectedApiId });
+      }
+    }
     if (id === 'code-history') {
       send('loadApisForFilter');
       loadCodeHistory(1);
@@ -1682,8 +1985,8 @@ function renderWorkflow(payload) {
         b.title = "Select an API first.";
       }
     });
-    if (previewList) previewList.innerHTML = '<div class="empty">No preview sessions yet.</div>';
-    if (fullList) fullList.innerHTML = '<div class="empty">No full source sessions yet.</div>';
+    if (previewList) previewList.innerHTML = '<div class="empty">Select an API to view preview sessions.</div>';
+    if (fullList) fullList.innerHTML = '<div class="empty">Select an API to view full source sessions.</div>';
     if (previewCount) previewCount.textContent = '0';
     if (fullCount) fullCount.textContent = '0';
     workflowLatest = { preview: null, full: null };
@@ -1741,28 +2044,29 @@ function renderWorkflow(payload) {
   // Render sessions lists
   const allPreview = payload.allPreviewSessions || [];
   const allFull = payload.allFullSessions || [];
+  const currentApiId = payload.api.id;
 
   if (previewCount) previewCount.textContent = allPreview.length;
   if (fullCount) fullCount.textContent = allFull.length;
 
   if (previewList) {
     if (allPreview.length === 0) {
-      previewList.innerHTML = '<div class="empty">No preview sessions yet.</div>';
+      previewList.innerHTML = '<div class="empty">No preview sessions for this API yet. Click "🚀 Generate Preview"!</div>';
     } else {
-      previewList.innerHTML = allPreview.map(s => renderSessionItem(s, 'PREVIEW')).join('');
+      previewList.innerHTML = allPreview.map(s => renderSessionItem(s, 'PREVIEW', currentApiId)).join('');
     }
   }
 
   if (fullList) {
     if (allFull.length === 0) {
-      fullList.innerHTML = '<div class="empty">No full source sessions yet.</div>';
+      fullList.innerHTML = '<div class="empty">No full source sessions. Generate full source after preview.</div>';
     } else {
-      fullList.innerHTML = allFull.map(s => renderSessionItem(s, 'FULL_SOURCE')).join('');
+      fullList.innerHTML = allFull.map(s => renderSessionItem(s, 'FULL_SOURCE', currentApiId)).join('');
     }
   }
 }
 
-function renderSessionItem(session, mode) {
+function renderSessionItem(session, mode, apiId) {
   const statusClass = session.status === 'SUCCEEDED' ? 'ok'
     : session.status === 'FAILED' ? 'err'
     : session.status === 'RUNNING' ? 'run'
@@ -1772,15 +2076,15 @@ function renderSessionItem(session, mode) {
   const provider = session.provider || 'unknown';
   const canReview = session.status === 'SUCCEEDED';
 
-  return \`<div class="wf-session-item">
-    <div class="wf-session-info">
+  return \`<div class="wf-session-item" data-session-id="\${session.id}" data-mode="\${mode}" data-api-id="\${apiId}">
+    <div class="wf-session-info" onclick="openSessionPreview('\${session.id}', '\${mode}', '\${apiId}')" style="cursor:pointer" title="\${canReview ? 'Click to view preview' : 'Session not completed'}">
       <div class="wf-session-model">\${esc(provider)} / \${esc(model)}</div>
       <div class="wf-session-date">\${esc(date)}</div>
     </div>
     <span class="wf-session-status \${statusClass}">\${esc(session.status)}</span>
     <div class="wf-session-actions">
-      <button class="btn-s" onclick="reviewSession('\${session.id}', '\${mode}')" \${canReview ? '' : 'disabled'} title="\${canReview ? 'Review this session' : 'Session not completed'}">View</button>
-      <button class="btn-d" onclick="deleteSession('\${session.id}')" title="Delete this session">Del</button>
+      <button class="btn-s" onclick="openSessionPreview('\${session.id}', '\${mode}', '\${apiId}')" \${canReview ? '' : 'disabled'} title="\${canReview ? 'Open preview tab' : 'Session not completed'}">👁️</button>
+      <button class="btn-d" onclick="deleteSession('\${session.id}')" title="Delete this session">🗑️</button>
     </div>
   </div>\`;
 }
@@ -1848,6 +2152,20 @@ function reviewSession(sessionId, mode) {
     send('reviewPreviewSession', { apiId: selectedApiId, sessionId: sessionId });
   } else {
     send('reviewFullSession', { apiId: selectedApiId, sessionId: sessionId });
+  }
+}
+
+function openSessionPreview(sessionId, mode, apiId) {
+  console.log('[uigenai][workflow] Open session preview', sessionId, mode, apiId);
+  const effectiveApiId = apiId || selectedApiId;
+  if (!sessionId || !effectiveApiId) {
+    setWorkflowMessage("Invalid session or API.");
+    return;
+  }
+  if (mode === 'PREVIEW') {
+    send('reviewPreviewSession', { apiId: effectiveApiId, sessionId: sessionId });
+  } else {
+    send('reviewFullSession', { apiId: effectiveApiId, sessionId: sessionId });
   }
 }
 
@@ -2189,8 +2507,275 @@ window.addEventListener('message', e => {
         loadCodeHistory(chCurrentPage);
       }
       break;
+    case 'inlineSessionData':
+      renderInlinePreview(data);
+      break;
   }
 });
+
+/* ---- Inline Preview Functions ---- */
+let inlineSessionData = null;
+let inlineCurrentTab = 'render';
+
+function viewSessionInline(sessionId, mode, apiId) {
+  console.log('[uigenai][inline] Loading session inline:', sessionId, mode, 'apiId:', apiId);
+  const pane = document.getElementById('inline-preview-pane');
+  const title = document.getElementById('inline-preview-title');
+  if (pane) {
+    pane.style.display = 'block';
+    title.textContent = 'Loading...';
+    // Show loading state
+    document.getElementById('inline-preview-iframe').srcdoc = '<html><body style="display:flex;align-items:center;justify-content:center;height:100%;font-family:sans-serif;color:#888;background:#f5f5f5"><span>Loading preview...</span></body></html>';
+  }
+  // Highlight selected session
+  document.querySelectorAll('.wf-session-item').forEach(el => el.classList.remove('selected'));
+  const selectedEl = document.querySelector(\`.wf-session-item[data-session-id="\${sessionId}"]\`);
+  if (selectedEl) selectedEl.classList.add('selected');
+
+  // Use provided apiId or fallback to selectedApiId
+  const effectiveApiId = apiId || selectedApiId;
+  if (!effectiveApiId) {
+    console.error('[uigenai][inline] No API ID available');
+    if (title) title.textContent = 'Error: No API selected';
+    return;
+  }
+  send('loadSessionInline', { sessionId, mode, apiId: effectiveApiId });
+}
+
+function renderInlinePreview(data) {
+  console.log('[uigenai][inline] Rendering inline preview:', data);
+  inlineSessionData = data;
+  const pane = document.getElementById('inline-preview-pane');
+  const title = document.getElementById('inline-preview-title');
+
+  if (!pane || !data) return;
+
+  pane.style.display = 'block';
+  title.textContent = \`\${data.mode === 'PREVIEW' ? '🎨 Preview' : '📦 Full Source'} - \${data.provider}/\${data.model}\`;
+
+  // Render based on mode
+  if (data.mode === 'PREVIEW') {
+    // Show render tab for preview
+    document.getElementById('inline-tab-tree').style.display = 'none';
+    switchInlineTab('render');
+
+    // Render HTML preview
+    const iframe = document.getElementById('inline-preview-iframe');
+    if (data.html) {
+      iframe.srcdoc = data.html;
+    } else {
+      iframe.srcdoc = '<html><body style="padding:20px;font-family:sans-serif;color:#666"><p>No preview HTML available</p></body></html>';
+    }
+
+    // Code tab
+    document.getElementById('inline-code-content').textContent = data.html || data.rawOutput || 'No content';
+  } else {
+    // Show tree tab for full source
+    document.getElementById('inline-tab-tree').style.display = 'inline-block';
+    switchInlineTab('tree');
+
+    // Render source tree
+    renderInlineSourceTree(data.files || []);
+
+    // Code tab shows raw output
+    document.getElementById('inline-code-content').textContent = data.rawOutput || 'No content';
+
+    // Render first file preview if available
+    const iframe = document.getElementById('inline-preview-iframe');
+    if (data.files && data.files.length > 0) {
+      const previewableExts = ['.html', '.htm', '.jsx', '.tsx', '.vue', '.svelte'];
+      const previewFile = data.files.find(f => previewableExts.some(e => f.path.toLowerCase().endsWith(e)));
+      if (previewFile) {
+        iframe.srcdoc = buildPreviewHtmlForFile(previewFile);
+      } else {
+        iframe.srcdoc = '<html><body style="padding:20px;font-family:sans-serif;color:#666"><p>Select a file from Source Tree to preview</p></body></html>';
+      }
+    } else {
+      iframe.srcdoc = '<html><body style="padding:20px;font-family:sans-serif;color:#666"><p>No files generated</p></body></html>';
+    }
+  }
+}
+
+function renderInlineSourceTree(files) {
+  const treeEl = document.getElementById('inline-tree-content');
+  if (!treeEl || !files.length) {
+    treeEl.innerHTML = '<div class="empty">No files in this session</div>';
+    return;
+  }
+
+  // Group files by folder
+  const tree = {};
+  files.forEach((file, idx) => {
+    const parts = file.path.split('/');
+    let current = tree;
+    parts.forEach((part, i) => {
+      if (i === parts.length - 1) {
+        current[part] = { _isFile: true, _index: idx, _file: file };
+      } else {
+        current[part] = current[part] || {};
+        current = current[part];
+      }
+    });
+  });
+
+  function renderNode(node, depth = 0) {
+    let html = '';
+    const entries = Object.entries(node).filter(([k]) => !k.startsWith('_'));
+    entries.sort((a, b) => {
+      const aIsFile = a[1]._isFile;
+      const bIsFile = b[1]._isFile;
+      if (aIsFile !== bIsFile) return aIsFile ? 1 : -1;
+      return a[0].localeCompare(b[0]);
+    });
+
+    for (const [name, value] of entries) {
+      const isFile = value._isFile;
+      const indent = depth * 12;
+      if (isFile) {
+        const ext = name.split('.').pop()?.toLowerCase() || '';
+        const icon = getFileIcon(ext);
+        html += \`<div class="inline-tree-item inline-tree-file" style="padding-left:\${indent + 8}px" onclick="selectInlineFile(\${value._index})" data-idx="\${value._index}">
+          <span>\${icon}</span>
+          <span>\${esc(name)}</span>
+          <span style="margin-left:auto;font-size:9px;color:var(--text2)">\${value._file.lines || '?'} lines</span>
+        </div>\`;
+      } else {
+        html += \`<div class="inline-tree-item inline-tree-folder" style="padding-left:\${indent + 8}px">
+          <span>📁</span>
+          <span>\${esc(name)}</span>
+        </div>\`;
+        html += renderNode(value, depth + 1);
+      }
+    }
+    return html;
+  }
+
+  treeEl.innerHTML = renderNode(tree) + '<div id="inline-file-viewer-container"></div>';
+}
+
+function getFileIcon(ext) {
+  const icons = { ts: '🟦', tsx: '⚛️', js: '🟨', jsx: '⚛️', css: '🎨', scss: '🎨', html: '🌐', json: '📋', md: '📝', vue: '💚', svelte: '🧡' };
+  return icons[ext] || '📄';
+}
+
+function selectInlineFile(idx) {
+  if (!inlineSessionData || !inlineSessionData.files) return;
+  const file = inlineSessionData.files[idx];
+  if (!file) return;
+
+  // Highlight selected
+  document.querySelectorAll('.inline-tree-file').forEach(el => el.classList.remove('selected'));
+  const selectedEl = document.querySelector(\`.inline-tree-file[data-idx="\${idx}"]\`);
+  if (selectedEl) selectedEl.classList.add('selected');
+
+  // Show file viewer
+  const container = document.getElementById('inline-file-viewer-container');
+  if (container) {
+    container.innerHTML = \`
+      <div class="inline-file-viewer">
+        <div class="inline-file-header">
+          <span class="inline-file-name">\${esc(file.path)}</span>
+          <button class="btn-s" onclick="copyFileContent(\${idx})" style="padding:2px 6px;font-size:9px">📋 Copy</button>
+        </div>
+        <div class="inline-file-content">\${esc(file.content)}</div>
+      </div>
+    \`;
+  }
+
+  // Also preview in iframe if previewable
+  const previewableExts = ['.html', '.htm', '.jsx', '.tsx', '.vue', '.svelte'];
+  if (previewableExts.some(e => file.path.toLowerCase().endsWith(e))) {
+    const iframe = document.getElementById('inline-preview-iframe');
+    iframe.srcdoc = buildPreviewHtmlForFile(file);
+  }
+}
+
+function buildPreviewHtmlForFile(file) {
+  const path = file.path.toLowerCase();
+  let html = file.content;
+
+  // For JSX/TSX/Vue, convert to renderable HTML
+  if (path.endsWith('.jsx') || path.endsWith('.tsx') || path.endsWith('.vue') || path.endsWith('.svelte')) {
+    html = convertJsxToHtml(file.content);
+  }
+
+  if (path.endsWith('.html') || path.endsWith('.htm')) {
+    return html;
+  }
+
+  return \`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css">
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;padding:16px;background:#fff}</style>
+</head><body>\${html}</body></html>\`;
+}
+
+function convertJsxToHtml(code) {
+  // Simple JSX to HTML conversion for preview
+  let c = code
+    .replace(/^import\\s.*$/gm, '')
+    .replace(/^export\\s+(default\\s+)?/gm, '')
+    .replace(/^\\s*\\/\\/.*$/gm, '')
+    .replace(/interface\\s+\\w+\\s*\\{[^}]*\\}/gs, '')
+    .replace(/type\\s+\\w+\\s*=[^;]+;/g, '');
+
+  const fnMatch = c.match(/return\\s*\\(([\\s\\S]*?)\\);?\\s*\\}?\\s*;?\\s*$/m);
+  let jsx = fnMatch ? fnMatch[1] : c;
+
+  jsx = jsx
+    .replace(/className=/g, 'class=')
+    .replace(/htmlFor=/g, 'for=')
+    .replace(/\\{[^}]*\\}/g, '')
+    .replace(/onClick=[^\\s>]*/g, '')
+    .replace(/onChange=[^\\s>]*/g, '')
+    .replace(/on[A-Z]\\w*=[^\\s>]*/g, '')
+    .replace(/<>|<\\/>/g, '')
+    .trim();
+
+  return jsx;
+}
+
+function switchInlineTab(tab) {
+  inlineCurrentTab = tab;
+  document.querySelectorAll('.inline-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('inline-tab-' + tab)?.classList.add('active');
+
+  document.getElementById('inline-render-pane').style.display = tab === 'render' ? 'block' : 'none';
+  document.getElementById('inline-code-pane').style.display = tab === 'code' ? 'block' : 'none';
+  document.getElementById('inline-tree-pane').style.display = tab === 'tree' ? 'block' : 'none';
+}
+
+function closeInlinePreview() {
+  document.getElementById('inline-preview-pane').style.display = 'none';
+  document.querySelectorAll('.wf-session-item').forEach(el => el.classList.remove('selected'));
+  inlineSessionData = null;
+}
+
+function copyInlinePreview() {
+  if (!inlineSessionData) return;
+  const content = inlineSessionData.html || inlineSessionData.rawOutput || '';
+  navigator.clipboard.writeText(content).then(() => {
+    alert('Copied to clipboard!');
+  });
+}
+
+function copyFileContent(idx) {
+  if (!inlineSessionData || !inlineSessionData.files) return;
+  const file = inlineSessionData.files[idx];
+  if (file) {
+    navigator.clipboard.writeText(file.content).then(() => {
+      alert('File content copied!');
+    });
+  }
+}
+
+function applyInlinePreview() {
+  if (!inlineSessionData) return;
+  if (inlineSessionData.mode === 'PREVIEW') {
+    alert('Preview mode - no files to apply. Generate Full Source first.');
+    return;
+  }
+  send('applySessionFiles', { sessionId: inlineSessionData.sessionId, files: inlineSessionData.files });
+}
 </script>
 
 <!-- Add Document Modal -->

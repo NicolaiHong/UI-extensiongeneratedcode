@@ -73,7 +73,10 @@ function isHtmlFile(path: string | null): boolean {
  * 4. Raw HTML directly
  * 5. Markdown with HTML code block
  */
-function extractHtmlFromOutput(output: string): { html: string; summary: string } {
+export function extractHtmlFromOutput(output: string): {
+  html: string;
+  summary: string;
+} {
   if (!output?.trim()) {
     return { html: "<p>No preview HTML returned.</p>", summary: "" };
   }
@@ -89,7 +92,9 @@ function extractHtmlFromOutput(output: string): { html: string; summary: string 
       // Case 1: { files: [...] } - look for HTML file
       if (Array.isArray(parsed.files) && parsed.files.length > 0) {
         // Find HTML file first
-        const htmlFile = parsed.files.find((f: any) => isHtmlFile(getFilePath(f)));
+        const htmlFile = parsed.files.find((f: any) =>
+          isHtmlFile(getFilePath(f)),
+        );
         if (htmlFile) {
           const content = getFileContent(htmlFile);
           if (content) {
@@ -107,7 +112,9 @@ function extractHtmlFromOutput(output: string): { html: string; summary: string 
 
       // Case 2: { changes: [...] } - same logic
       if (Array.isArray(parsed.changes) && parsed.changes.length > 0) {
-        const htmlFile = parsed.changes.find((f: any) => isHtmlFile(getFilePath(f)));
+        const htmlFile = parsed.changes.find((f: any) =>
+          isHtmlFile(getFilePath(f)),
+        );
         if (htmlFile) {
           const content = getFileContent(htmlFile);
           if (content) {
@@ -182,20 +189,26 @@ export function showPreviewReviewPanel(opts: PreviewReviewOptions): void {
     switch (msg.type) {
       case "copy":
         await vscode.env.clipboard.writeText(raw);
-        vscode.window.showInformationMessage("Preview HTML copied to clipboard.");
+        vscode.window.showInformationMessage(
+          "Preview HTML copied to clipboard.",
+        );
         break;
       case "generateFull":
         if (opts.onGenerateFull) {
           await opts.onGenerateFull();
         } else {
-          vscode.window.showWarningMessage("Full source generation is not available.");
+          vscode.window.showWarningMessage(
+            "Full source generation is not available.",
+          );
         }
         break;
       case "regenerate":
         if (opts.onRegenerate) {
           await opts.onRegenerate();
         } else {
-          vscode.window.showWarningMessage("Regenerate action is not available.");
+          vscode.window.showWarningMessage(
+            "Regenerate action is not available.",
+          );
         }
         break;
     }
@@ -232,10 +245,13 @@ body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#ccc;height:100v
     <div class="meta">
       <span>${escapeHtml(createdAt)}</span>
       <span class="badge ${
-        status === "SUCCEEDED" ? "st-ok"
-        : status === "FAILED" ? "st-err"
-        : status === "RUNNING" ? "st-run"
-        : "st-queue"
+        status === "SUCCEEDED"
+          ? "st-ok"
+          : status === "FAILED"
+            ? "st-err"
+            : status === "RUNNING"
+              ? "st-run"
+              : "st-queue"
       }">${escapeHtml(status)}</span>
     </div>
   </div>
