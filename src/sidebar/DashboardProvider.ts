@@ -256,6 +256,50 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           }
           break;
 
+        /* ---- Code History (Global) ---- */
+        case "loadCodeHistory":
+          try {
+            const result = await generatedCodesApi.listAll(
+              msg.page || 1,
+              msg.limit || 15,
+              {
+                search: msg.search,
+                apiId: msg.apiId,
+                language: msg.language,
+              },
+            );
+            this._post("codeHistory", result);
+          } catch (e: unknown) {
+            this._post("codeHistoryError", { error: extractApiError(e) });
+          }
+          break;
+        case "viewCodeGlobal":
+          {
+            const code = await generatedCodesApi.getByIdGlobal(msg.id);
+            const { viewGeneratedCodeCmd } =
+              await import("../commands/generatedCodeCommands");
+            await viewGeneratedCodeCmd(code.api_id, msg.id);
+          }
+          break;
+        case "applyCodeGlobal":
+          {
+            const code = await generatedCodesApi.getByIdGlobal(msg.id);
+            const { applyGeneratedCodeCmd } =
+              await import("../commands/generatedCodeCommands");
+            await applyGeneratedCodeCmd(code.api_id, msg.id);
+          }
+          break;
+        case "deleteCodeGlobal":
+          if (await confirmDelete("this generated code")) {
+            await generatedCodesApi.deleteGlobal(msg.id);
+            vscode.window.showInformationMessage("Code deleted.");
+            this._post("codeDeleted", { id: msg.id });
+          }
+          break;
+        case "loadApisForFilter":
+          this._post("apisForFilter", await apisApi.list());
+          break;
+
         /* ---- Deployments ---- */
         case "loadDeployments":
           this._post("deployments", {
@@ -921,6 +965,17 @@ button:disabled:hover{filter:none;background:inherit}
 .badge-err{background:rgba(244,71,71,.15);color:var(--err)}
 .badge-info{background:rgba(0,122,204,.15);color:var(--accent2)}
 
+/* Code History */
+.ch-item{display:flex;align-items:flex-start;padding:6px;border-radius:4px;margin:2px 0;background:rgba(255,255,255,.02);border:1px solid var(--border)}
+.ch-item:hover{background:rgba(255,255,255,.05)}
+.ch-item-info{flex:1;min-width:0;overflow:hidden}
+.ch-item-path{font-size:11px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.ch-item-path:hover{color:var(--accent)}
+.ch-item-meta{display:flex;gap:6px;font-size:10px;color:var(--text2);margin-top:2px;flex-wrap:wrap;align-items:center}
+.ch-item-actions{display:flex;gap:2px;flex-shrink:0;margin-left:6px}
+.ch-api-badge{font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(0,162,173,.15);color:var(--accent)}
+.ch-lang-badge{font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(255,255,255,.1);color:var(--text2)}
+
 /* Sub-sections (nested under APIs) */
 .sub{padding-left:10px;margin-top:4px}
 .sub-hd{font-size:10px;font-weight:600;color:var(--text2);padding:4px 0;display:flex;align-items:center;justify-content:space-between;cursor:pointer}
@@ -1158,6 +1213,45 @@ ${
   <div class="sec-body" id="body-apis">
     <div class="empty" id="apis-loading"><span class="spin">⟳</span> Loading...</div>
     <div id="apis-list"></div>
+  </div>
+</div>
+
+<!-- Code History Section -->
+<div class="section" id="sec-code-history">
+  <div class="sec-hd" onclick="toggleSec('code-history')">
+    <h3>Code History</h3>
+    <span class="arrow" id="arrow-code-history">&#9654;</span>
+  </div>
+  <div class="sec-body" id="body-code-history">
+    <div class="ch-filters" style="margin-bottom:8px">
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <input type="text" id="ch-search" placeholder="Search file path..."
+          style="flex:1;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px"
+          onkeyup="if(event.key==='Enter')loadCodeHistory(1)">
+        <button class="btn-p" onclick="loadCodeHistory(1)" style="padding:6px 10px">Search</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="ch-api-filter" style="flex:1;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px" onchange="loadCodeHistory(1)">
+          <option value="">All APIs</option>
+        </select>
+        <select id="ch-language-filter" style="width:100px;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px" onchange="loadCodeHistory(1)">
+          <option value="">All</option>
+          <option value="typescript">TS</option>
+          <option value="javascript">JS</option>
+          <option value="html">HTML</option>
+          <option value="css">CSS</option>
+        </select>
+      </div>
+    </div>
+    <div class="empty" id="ch-loading" style="display:none"><span class="spin">⟳</span> Loading...</div>
+    <div id="ch-list"></div>
+    <div id="ch-pagination" style="display:none;margin-top:8px;display:flex;justify-content:space-between;align-items:center;font-size:11px">
+      <span id="ch-page-info" style="color:var(--text2)"></span>
+      <div style="display:flex;gap:4px">
+        <button class="btn-s" id="ch-prev" onclick="loadCodeHistory(chCurrentPage-1)">Prev</button>
+        <button class="btn-s" id="ch-next" onclick="loadCodeHistory(chCurrentPage+1)">Next</button>
+      </div>
+    </div>
   </div>
 </div>
 `
@@ -1433,7 +1527,90 @@ function toggleSec(id) {
   if (open) {
     if (id === 'apis') send('loadApis');
     if (id === 'workflow') send('loadApis');
+    if (id === 'code-history') {
+      send('loadApisForFilter');
+      loadCodeHistory(1);
+    }
   }
+}
+
+/* ---- Code History ---- */
+let chCurrentPage = 1;
+let chTotalPages = 1;
+let chData = [];
+
+function loadCodeHistory(page) {
+  const search = document.getElementById('ch-search')?.value?.trim() || '';
+  const apiId = document.getElementById('ch-api-filter')?.value || '';
+  const language = document.getElementById('ch-language-filter')?.value || '';
+
+  chCurrentPage = Math.max(1, page || 1);
+
+  document.getElementById('ch-loading').style.display = 'block';
+  document.getElementById('ch-list').innerHTML = '';
+  document.getElementById('ch-pagination').style.display = 'none';
+
+  send('loadCodeHistory', {
+    page: chCurrentPage,
+    limit: 15,
+    search: search || undefined,
+    apiId: apiId || undefined,
+    language: language || undefined,
+  });
+}
+
+function renderCodeHistory(result) {
+  const listEl = document.getElementById('ch-list');
+  const loadingEl = document.getElementById('ch-loading');
+  const paginationEl = document.getElementById('ch-pagination');
+  const pageInfoEl = document.getElementById('ch-page-info');
+  const prevBtn = document.getElementById('ch-prev');
+  const nextBtn = document.getElementById('ch-next');
+
+  loadingEl.style.display = 'none';
+  chData = result.data || [];
+  chTotalPages = result.totalPages || 1;
+
+  if (chData.length === 0) {
+    listEl.innerHTML = '<div class="empty">No generated codes found.</div>';
+    paginationEl.style.display = 'none';
+    return;
+  }
+
+  const previewExts = ['.jsx', '.tsx', '.html', '.htm', '.vue', '.svelte'];
+  listEl.innerHTML = chData.map(code => {
+    const isPreviewable = previewExts.some(e => code.file_path.toLowerCase().endsWith(e));
+    const date = new Date(code.created_at).toLocaleDateString();
+    const fileName = code.file_path.split(/[\\\\/]/).pop() || code.file_path;
+
+    return \`<div class="ch-item">
+      <div class="ch-item-info">
+        <div class="ch-item-path" title="\${esc(code.file_path)}" onclick="send('viewCodeGlobal',{id:'\${code.id}'})">\${esc(fileName)}</div>
+        <div class="ch-item-meta">
+          <span class="ch-api-badge">\${esc(code.api_name || 'Unknown')}</span>
+          \${code.language ? \`<span class="ch-lang-badge">\${esc(code.language)}</span>\` : ''}
+          <span>\${date}</span>
+        </div>
+      </div>
+      <div class="ch-item-actions">
+        <button class="btn-icon" title="View code" onclick="send('viewCodeGlobal',{id:'\${code.id}'})">👁️</button>
+        <button class="btn-icon" title="Apply to workspace" onclick="send('applyCodeGlobal',{id:'\${code.id}'})">📥</button>
+        <button class="btn-icon" title="Delete" onclick="send('deleteCodeGlobal',{id:'\${code.id}'})">🗑️</button>
+      </div>
+    </div>\`;
+  }).join('');
+
+  paginationEl.style.display = 'flex';
+  pageInfoEl.textContent = \`Page \${result.page} of \${result.totalPages} (\${result.total} codes)\`;
+  prevBtn.disabled = result.page <= 1;
+  nextBtn.disabled = result.page >= result.totalPages;
+}
+
+function populateApiFilter(apis) {
+  const select = document.getElementById('ch-api-filter');
+  if (!select) return;
+  select.innerHTML = '<option value="">All APIs</option>' +
+    (apis || []).map(a => \`<option value="\${a.id}">\${esc(a.name)}</option>\`).join('');
 }
 
 /* ---- Workflow helpers ---- */
@@ -1992,6 +2169,24 @@ window.addEventListener('message', e => {
       if (wfSelectedApiId === data?.apiId) {
         wfFileContent = null;
         updateWfStatus(data?.error || 'Failed to load API document', 'var(--err)');
+      }
+      break;
+    case 'codeHistory':
+      renderCodeHistory(data);
+      break;
+    case 'codeHistoryError':
+      document.getElementById('ch-loading').style.display = 'none';
+      document.getElementById('ch-list').innerHTML = \`<div class="empty" style="color:var(--err)">\${esc(data?.error || 'Error loading code history')}</div>\`;
+      break;
+    case 'apisForFilter':
+      populateApiFilter(data);
+      break;
+    case 'codeDeleted':
+      chData = chData.filter(c => c.id !== data.id);
+      if (chData.length === 0 && chCurrentPage > 1) {
+        loadCodeHistory(chCurrentPage - 1);
+      } else {
+        loadCodeHistory(chCurrentPage);
       }
       break;
   }
