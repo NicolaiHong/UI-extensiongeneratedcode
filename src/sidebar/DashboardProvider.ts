@@ -268,6 +268,13 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             await updateDeploymentStatusCmd(msg.apiId, msg.id);
           }
           break;
+        case "startDeployment":
+          {
+            const { startDeploymentCmd } =
+              await import("../commands/deploymentCommands");
+            await startDeploymentCmd(msg.apiId, msg.id);
+          }
+          break;
         case "deleteDeployment":
           if (await confirmDelete("this deployment")) {
             await deploymentsApi.delete(msg.apiId, msg.id);
@@ -476,7 +483,7 @@ function toggleSec(id) {
 /* ---- Status badge helper ---- */
 function statusBadge(s) {
   if (!s) return '';
-  const map = { ACTIVE:'ok', DEPLOYED:'ok', SUCCEEDED:'ok', INACTIVE:'warn', PENDING:'warn', QUEUED:'warn', IN_PROGRESS:'info', RUNNING:'info', DEPRECATED:'err', FAILED:'err', ROLLED_BACK:'err' };
+  const map = { ACTIVE:'ok', DEPLOYED:'ok', SUCCEEDED:'ok', INACTIVE:'warn', PENDING:'warn', QUEUED:'warn', READY_TO_DEPLOY:'info', DEPLOYING:'info', IN_PROGRESS:'info', RUNNING:'info', DEPRECATED:'err', FAILED:'err', DEPLOY_FAILED:'err', ROLLED_BACK:'err' };
   return '<span class="badge badge-' + (map[s] || 'info') + '">' + s + '</span>';
 }
 
@@ -653,13 +660,16 @@ function renderDeployments(apiId, deployments) {
   c.innerHTML = deployments.map(d => \`
     <div class="item">
       <div class="item-name">
-        \${esc(d.provider || 'deploy')} <span class="badge badge-info">\${d.environment}</span> \${statusBadge(d.status)}
+        \${esc(d.provider || 'pending')} <span class="badge badge-info">\${d.environment}</span> \${statusBadge(d.status)}
+        \${d.deploy_url ? '<a href="' + esc(d.deploy_url) + '" style="color:var(--accent);margin-left:4px;font-size:10px" target="_blank">🔗 View</a>' : ''}
       </div>
       <div class="item-actions">
+        \${d.status === 'READY_TO_DEPLOY' ? '<button class="btn-icon" title="Start deployment" onclick="send(\\'startDeployment\\',{apiId:\\'' + apiId + '\\',id:\\'' + d.id + '\\'})" style="color:var(--ok)">▶️</button>' : ''}
         <button class="btn-icon" title="Update status" onclick="send('updateDeployment',{apiId:'\${apiId}',id:'\${d.id}'})">✏️</button>
         <button class="btn-icon" title="Delete" onclick="send('deleteDeployment',{apiId:'\${apiId}',id:'\${d.id}'})">🗑️</button>
       </div>
     </div>
+    \${d.error_message ? '<div style="color:var(--err);font-size:10px;padding:2px 6px">' + esc(d.error_message) + '</div>' : ''}
   \`).join('');
 }
 
