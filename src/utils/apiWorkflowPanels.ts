@@ -9,15 +9,25 @@ interface PreviewReviewOptions {
   onRegenerate?: () => Promise<void> | void;
 }
 
-function stripScripts(html: string): string {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, "");
+/**
+ * PreviewSessionContent - normalized output from extractPreviewSessionContent
+ */
+export interface PreviewSessionContent {
+  previewHtml: string;
+  rawOutput: string;
+  summary: string;
+  sourceMetadata: {
+    source: "files" | "changes" | "markdown" | "direct" | "fallback";
+    fileCount: number;
+    htmlFileName: string | null;
+  };
 }
 
 /**
  * Extract HTML from markdown code blocks.
- * Returns the HTML content if found, otherwise null.
+ * Handles: ```html\n...\n```, ```\n<!DOCTYPE...\n```, or direct HTML
  */
-function extractHtmlFromMarkdown(text: string): string | null {
+function unwrapCodeFences(text: string): string | null {
   if (!text) return null;
 
   // Pattern 1: ```html\n...\n```
@@ -26,15 +36,25 @@ function extractHtmlFromMarkdown(text: string): string | null {
     return htmlBlockMatch[1].trim();
   }
 
-  // Pattern 2: ```\n<!DOCTYPE...\n```
-  const doctypeBlockMatch = text.match(/```\s*\n(<!DOCTYPE[\s\S]*?)\n```/i);
+  // Pattern 2: ```\n<!DOCTYPE...\n``` (any language or no language)
+  const doctypeBlockMatch = text.match(/```\w*\s*\n(<!DOCTYPE[\s\S]*?)\n```/i);
   if (doctypeBlockMatch) {
     return doctypeBlockMatch[1].trim();
   }
 
-  // Pattern 3: Direct HTML (no code block)
+  // Pattern 3: ```\n<html...\n```
+  const htmlTagMatch = text.match(/```\w*\s*\n(<html[\s\S]*?)\n```/i);
+  if (htmlTagMatch) {
+    return htmlTagMatch[1].trim();
+  }
+
+  // Pattern 4: Direct HTML (no code block)
   const trimmed = text.trim();
-  if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+  if (
+    trimmed.startsWith("<!DOCTYPE") ||
+    trimmed.startsWith("<html") ||
+    trimmed.startsWith("<HTML")
+  ) {
     return trimmed;
   }
 
@@ -42,7 +62,7 @@ function extractHtmlFromMarkdown(text: string): string | null {
 }
 
 /**
- * Get file path from various field names used by AI.
+ * Get file path from various field names used by AI responses.
  */
 function getFilePath(file: any): string | null {
   return file?.fileName || file?.path || file?.name || file?.filePath || null;
@@ -65,109 +85,250 @@ function isHtmlFile(path: string | null): boolean {
 }
 
 /**
- * Extract HTML content from session output.
- * The output may be:
- * 1. A JSON object with files array containing HTML
- * 2. A JSON object with summary_md containing markdown with HTML code block
- * 3. A JSON object with changes array
- * 4. Raw HTML directly
- * 5. Markdown with HTML code block
+ * extractPreviewSessionContent - Main normalization helper
+ *
+ * Takes a Session object and extracts normalized preview content.
+ * Handles all backend response formats with fallback resolution.
+ *
+ * Fallback priority:
+ * 1. JSON envelope with files array: { summary_md, files: [{ path, content }] }
+ * 2. JSON envelope with changes array: { changes: [{ fileName, codeContent }] }
+ * 3. Markdown with HTML code fences
+ * 4. Direct HTML content
+ * 5. Fallback message
  */
-export function extractHtmlFromOutput(output: string): {
-  html: string;
-  summary: string;
-} {
+export function extractPreviewSessionContent(
+  session: Session,
+): PreviewSessionContent {
+  const output = session.output_summary_md || "";
+
+  const result: PreviewSessionContent = {
+    previewHtml: "",
+    rawOutput: output,
+    summary: "",
+    sourceMetadata: {
+      source: "fallback",
+      fileCount: 0,
+      htmlFileName: null,
+    },
+  };
+
   if (!output?.trim()) {
-    return { html: "<p>No preview HTML returned.</p>", summary: "" };
+    console.log("[extractPreviewSessionContent] Empty output");
+    result.previewHtml =
+      '<div style="padding:20px;color:#666;text-align:center;">No preview HTML returned from generation.</div>';
+    return result;
   }
 
   const trimmed = output.trim();
+  console.log(
+    "[extractPreviewSessionContent] Input length:",
+    trimmed.length,
+    "starts with:",
+    trimmed.substring(0, 50),
+  );
 
   // Try to parse as JSON
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       const parsed = JSON.parse(trimmed);
-      const summaryText = parsed.summary_md || parsed.summary || "";
+      console.log(
+        "[extractPreviewSessionContent] Parsed JSON keys:",
+        Object.keys(parsed),
+      );
 
-      // Case 1: { files: [...] } - look for HTML file
+      result.summary = parsed.summary_md || parsed.summary || "";
+
+      // Case 1: { files: [...] } - Backend envelope format
       if (Array.isArray(parsed.files) && parsed.files.length > 0) {
+        console.log(
+          "[extractPreviewSessionContent] Found files array with",
+          parsed.files.length,
+          "files",
+        );
+        result.sourceMetadata.source = "files";
+        result.sourceMetadata.fileCount = parsed.files.length;
+
         // Find HTML file first
         const htmlFile = parsed.files.find((f: any) =>
           isHtmlFile(getFilePath(f)),
         );
         if (htmlFile) {
           const content = getFileContent(htmlFile);
+          const filePath = getFilePath(htmlFile);
+          console.log(
+            "[extractPreviewSessionContent] Found HTML file:",
+            filePath,
+            "content length:",
+            content?.length,
+          );
           if (content) {
-            return { html: content, summary: summaryText };
+            result.previewHtml = unwrapCodeFences(content) || content;
+            result.sourceMetadata.htmlFileName = filePath;
+            return result;
           }
         }
+
         // Fallback to first file with content
         for (const file of parsed.files) {
           const content = getFileContent(file);
           if (content) {
-            return { html: content, summary: summaryText };
+            const filePath = getFilePath(file);
+            console.log(
+              "[extractPreviewSessionContent] Using first file:",
+              filePath,
+              "length:",
+              content.length,
+            );
+            result.previewHtml = unwrapCodeFences(content) || content;
+            result.sourceMetadata.htmlFileName = filePath;
+            return result;
           }
         }
       }
 
-      // Case 2: { changes: [...] } - same logic
+      // Case 2: { changes: [...] } - Alternative response format
       if (Array.isArray(parsed.changes) && parsed.changes.length > 0) {
+        console.log(
+          "[extractPreviewSessionContent] Found changes array with",
+          parsed.changes.length,
+          "changes",
+        );
+        result.sourceMetadata.source = "changes";
+        result.sourceMetadata.fileCount = parsed.changes.length;
+
         const htmlFile = parsed.changes.find((f: any) =>
           isHtmlFile(getFilePath(f)),
         );
         if (htmlFile) {
           const content = getFileContent(htmlFile);
+          const filePath = getFilePath(htmlFile);
+          console.log(
+            "[extractPreviewSessionContent] Found HTML in changes:",
+            filePath,
+            "length:",
+            content?.length,
+          );
           if (content) {
-            return { html: content, summary: summaryText };
+            result.previewHtml = unwrapCodeFences(content) || content;
+            result.sourceMetadata.htmlFileName = filePath;
+            return result;
           }
         }
+
         for (const file of parsed.changes) {
           const content = getFileContent(file);
           if (content) {
-            return { html: content, summary: summaryText };
+            const filePath = getFilePath(file);
+            result.previewHtml = unwrapCodeFences(content) || content;
+            result.sourceMetadata.htmlFileName = filePath;
+            return result;
           }
         }
       }
 
       // Case 3: { codeContent: "..." } directly
       if (parsed.codeContent) {
-        return { html: parsed.codeContent, summary: summaryText };
+        result.sourceMetadata.source = "direct";
+        result.previewHtml =
+          unwrapCodeFences(parsed.codeContent) || parsed.codeContent;
+        return result;
       }
 
       // Case 4: { html: "..." }
       if (parsed.html) {
-        return { html: parsed.html, summary: summaryText };
+        result.sourceMetadata.source = "direct";
+        result.previewHtml = unwrapCodeFences(parsed.html) || parsed.html;
+        return result;
       }
 
       // Case 5: summary_md contains HTML in markdown code block
-      if (summaryText) {
-        const extractedHtml = extractHtmlFromMarkdown(summaryText);
+      if (result.summary) {
+        const extractedHtml = unwrapCodeFences(result.summary);
         if (extractedHtml) {
-          // Remove the code block from summary for display
-          const cleanSummary = summaryText
+          result.sourceMetadata.source = "markdown";
+          result.previewHtml = extractedHtml;
+          // Clean the summary for display
+          result.summary = result.summary
             .replace(/```html\s*\n[\s\S]*?\n```/gi, "")
-            .replace(/```\s*\n<!DOCTYPE[\s\S]*?\n```/gi, "")
+            .replace(/```\w*\s*\n<!DOCTYPE[\s\S]*?\n```/gi, "")
+            .replace(/```\w*\s*\n<html[\s\S]*?\n```/gi, "")
             .trim();
-          return { html: extractedHtml, summary: cleanSummary };
+          return result;
         }
       }
-    } catch {
+    } catch (e) {
+      console.log("[extractPreviewSessionContent] JSON parse error:", e);
       // Not valid JSON, continue to other methods
     }
   }
 
   // Try to extract HTML from markdown code block
-  const extractedHtml = extractHtmlFromMarkdown(trimmed);
+  const extractedHtml = unwrapCodeFences(trimmed);
   if (extractedHtml) {
-    const cleanSummary = trimmed
+    result.sourceMetadata.source = "markdown";
+    result.previewHtml = extractedHtml;
+    result.summary = trimmed
       .replace(/```html\s*\n[\s\S]*?\n```/gi, "")
-      .replace(/```\s*\n<!DOCTYPE[\s\S]*?\n```/gi, "")
+      .replace(/```\w*\s*\n<!DOCTYPE[\s\S]*?\n```/gi, "")
+      .replace(/```\w*\s*\n<html[\s\S]*?\n```/gi, "")
       .trim();
-    return { html: extractedHtml, summary: cleanSummary };
+    return result;
   }
 
-  // Treat as raw HTML
-  return { html: trimmed, summary: "" };
+  // Check if it looks like direct HTML
+  if (
+    trimmed.startsWith("<!DOCTYPE") ||
+    trimmed.startsWith("<html") ||
+    trimmed.startsWith("<HTML")
+  ) {
+    result.sourceMetadata.source = "direct";
+    result.previewHtml = trimmed;
+    return result;
+  }
+
+  // Fallback: show the raw content as the preview
+  console.log(
+    "[extractPreviewSessionContent] No HTML found, using fallback display",
+  );
+  result.sourceMetadata.source = "fallback";
+  result.previewHtml = `<div style="padding:20px;font-family:monospace;white-space:pre-wrap;background:#f5f5f5;color:#333;">${escapeHtml(trimmed.substring(0, 2000))}${trimmed.length > 2000 ? "..." : ""}</div>`;
+  return result;
+}
+
+/**
+ * Legacy function for backward compatibility
+ * @deprecated Use extractPreviewSessionContent instead
+ */
+export function extractHtmlFromOutput(output: string): {
+  html: string;
+  summary: string;
+} {
+  const mockSession: Session = {
+    id: "",
+    project_id: "",
+    api_id: null,
+    provider: "",
+    model: "",
+    mode: "PREVIEW",
+    status: "SUCCEEDED",
+    error_message: null,
+    output_summary_md: output,
+    created_at: new Date().toISOString(),
+    finished_at: new Date().toISOString(),
+  };
+  const result = extractPreviewSessionContent(mockSession);
+  return { html: result.previewHtml, summary: result.summary };
+}
+
+/**
+ * Safely escape content for embedding in inline script.
+ * Converts </script and <!-- sequences to escaped forms that evaluate correctly.
+ */
+function safeJsonForScript(value: string): string {
+  return JSON.stringify(value)
+    .replace(/<\//g, "<\\/")
+    .replace(/<!--/g, "<\\!--");
 }
 
 export function showPreviewReviewPanel(opts: PreviewReviewOptions): void {
@@ -178,17 +339,31 @@ export function showPreviewReviewPanel(opts: PreviewReviewOptions): void {
     { enableScripts: true, retainContextWhenHidden: true },
   );
 
-  const rawOutput = opts.session.output_summary_md || "";
-  const { html, summary } = extractHtmlFromOutput(rawOutput);
-  const raw = html;
-  const sanitized = stripScripts(raw);
+  // Use the new normalized extraction function
+  const extracted = extractPreviewSessionContent(opts.session);
+
+  console.log("[PreviewPanel] rawOutput length:", extracted.rawOutput.length);
+  console.log(
+    "[PreviewPanel] rawOutput preview:",
+    extracted.rawOutput.substring(0, 500),
+  );
+  console.log(
+    "[PreviewPanel] extracted html length:",
+    extracted.previewHtml.length,
+  );
+  console.log(
+    "[PreviewPanel] extracted html preview:",
+    extracted.previewHtml.substring(0, 300),
+  );
+  console.log("[PreviewPanel] source metadata:", extracted.sourceMetadata);
+
   const createdAt = new Date(opts.session.created_at).toLocaleString();
   const status = opts.session.status;
 
   panel.webview.onDidReceiveMessage(async (msg) => {
     switch (msg.type) {
       case "copy":
-        await vscode.env.clipboard.writeText(raw);
+        await vscode.env.clipboard.writeText(extracted.previewHtml);
         vscode.window.showInformationMessage(
           "Preview HTML copied to clipboard.",
         );
@@ -213,6 +388,10 @@ export function showPreviewReviewPanel(opts: PreviewReviewOptions): void {
         break;
     }
   });
+
+  // Safely escape content for inline script embedding
+  const sanitizedJson = safeJsonForScript(extracted.previewHtml);
+  const rawJson = safeJsonForScript(extracted.previewHtml);
 
   panel.webview.html = /*html*/ `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
@@ -239,6 +418,8 @@ body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#ccc;height:100v
 .pane-body{flex:1;overflow:auto;background:#111}
 .pane-body iframe{width:100%;height:100%;border:none;background:#fff}
 .raw{padding:10px 12px;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:11px;line-height:1.6;white-space:pre-wrap;color:#ddd}
+/* Syntax highlighting colors */
+.hl-tag{color:#569cd6}.hl-attr{color:#9cdcfe}.hl-str{color:#ce9178}.hl-cmt{color:#6a9955;font-style:italic}.hl-ent{color:#d7ba7d}.hl-doctype{color:#608b4e}
 </style></head><body>
   <div class="header">
     <div class="title">Preview — ${escapeHtml(opts.apiName)}</div>
@@ -262,12 +443,12 @@ body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#ccc;height:100v
     <button class="btn btn-ghost" onclick="send('copy')">Copy HTML</button>
   </div>
 
-  ${summary ? `<div class="summary-bar">${escapeHtml(summary)}</div>` : ""}
+  ${extracted.summary ? `<div class="summary-bar">${escapeHtml(extracted.summary)}</div>` : ""}
 
   <div class="content">
     <div class="pane">
       <div class="pane-hd">Rendered Preview</div>
-      <div class="pane-body"><iframe id="preview-frame" sandbox="allow-scripts allow-forms"></iframe></div>
+      <div class="pane-body"><iframe id="preview-frame" sandbox="allow-scripts allow-forms allow-same-origin allow-modals"></iframe></div>
     </div>
     <div class="pane" style="max-width:40%">
       <div class="pane-hd">Raw Output</div>
@@ -277,15 +458,41 @@ body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#ccc;height:100v
 
   <script>
     const vscode = acquireVsCodeApi();
-    const sanitized = ${JSON.stringify(
-      sanitized.replace(/<\/(script)/gi, "<\\/$1"),
-    )};
-    const raw = ${JSON.stringify(raw.replace(/<\/(script)/gi, "<\\/$1"))};
+    const sanitized = ${sanitizedJson};
+    const raw = ${rawJson};
 
     function send(type){ vscode.postMessage({ type }); }
 
+    // Simple HTML syntax highlighting
+    function highlightHtml(code) {
+      // Escape HTML entities first
+      let html = code
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      // DOCTYPE
+      html = html.replace(/(&lt;!DOCTYPE\\s+[^&]*&gt;)/gi, '<span class="hl-doctype">$1</span>');
+
+      // Comments
+      html = html.replace(/(&lt;!--[\\s\\S]*?--&gt;)/g, '<span class="hl-cmt">$1</span>');
+
+      // Tags with attributes
+      html = html.replace(/(&lt;\\/?)([a-zA-Z][a-zA-Z0-9-]*)([^&]*?)(&gt;)/g, function(m, open, tag, attrs, close) {
+        // Highlight attributes inside
+        const highlightedAttrs = attrs.replace(/([a-zA-Z-]+)(=)(&quot;|')(.*?)(\\3)/g,
+          '<span class="hl-attr">$1</span>$2<span class="hl-str">$3$4$5</span>');
+        return open + '<span class="hl-tag">' + tag + '</span>' + highlightedAttrs + close;
+      });
+
+      // Entity references
+      html = html.replace(/(&amp;[a-zA-Z0-9]+;)/g, '<span class="hl-ent">$1</span>');
+
+      return html;
+    }
+
     document.getElementById('preview-frame').srcdoc = sanitized;
-    document.getElementById('raw').innerText = raw;
+    document.getElementById('raw').innerHTML = highlightHtml(raw);
   </script>
 </body></html>`;
 }

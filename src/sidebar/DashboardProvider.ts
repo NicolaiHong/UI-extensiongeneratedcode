@@ -17,6 +17,12 @@ import { extractApiError } from "../utils/errors";
 import { escapeHtml } from "../utils/html";
 import { showSessionReviewPanel } from "../utils/sessionReviewPanel";
 import { showPreviewReviewPanel } from "../utils/apiWorkflowPanels";
+import {
+  loadSkill,
+  enhanceActionsPrompt,
+  enhanceDesignPrompt,
+  UI_UX_PRO_MAX_SKILL,
+} from "../utils/skillLoader";
 
 export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "uigenai.dashboard";
@@ -409,6 +415,10 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.customPrompt
               ? msg.customPrompt.substring(0, 50) + "..."
               : "(none)",
+            "useSkill:",
+            msg.useSkill,
+            "skillName:",
+            msg.skillName,
           );
           await this._generateApiSession(
             msg.apiId,
@@ -417,6 +427,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.provider,
             msg.model,
             msg.customPrompt,
+            msg.useSkill,
+            msg.skillName,
           );
           break;
         case "generateFull":
@@ -431,6 +443,10 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.customPrompt
               ? msg.customPrompt.substring(0, 50) + "..."
               : "(none)",
+            "useSkill:",
+            msg.useSkill,
+            "skillName:",
+            msg.skillName,
           );
           await this._generateApiSession(
             msg.apiId,
@@ -439,6 +455,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             msg.provider,
             msg.model,
             msg.customPrompt,
+            msg.useSkill,
+            msg.skillName,
           );
           break;
         case "markReady":
@@ -599,6 +617,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     provider?: string,
     model?: string,
     customPrompt?: string,
+    useSkill?: boolean,
+    skillName?: string,
   ) {
     const selectedProvider = provider || "gemini";
     const selectedModel = model || "gemini-2.5-flash";
@@ -611,6 +631,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       customPrompt: customPrompt
         ? customPrompt.substring(0, 50) + "..."
         : "(none)",
+      useSkill,
+      skillName,
     });
     if (!apiId) {
       vscode.window.showErrorMessage("Select an API first.");
@@ -620,6 +642,51 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     try {
       const api = await apisApi.getById(apiId);
       console.log("[uigenai] API loaded for generation:", api.name);
+
+      // Process skill enhancement if enabled
+      let finalPrompt = customPrompt || "";
+      if (useSkill) {
+        console.log("[uigenai] Loading skill:", skillName || "ui-ux-pro-max");
+        const skillConfig = {
+          ...UI_UX_PRO_MAX_SKILL,
+          name: skillName || "ui-ux-pro-max",
+        };
+        const skill = await loadSkill(skillConfig);
+        if (skill) {
+          console.log("[uigenai] Skill loaded, enhancing prompts...");
+          // Extract design and actions from customPrompt if present
+          let actionsPrompt = "";
+          let designPrompt = "";
+
+          // Parse customPrompt for design style
+          const designMatch = customPrompt?.match(
+            /Design Style:\s*(.+?)(?:\n|$)/,
+          );
+          if (designMatch) {
+            designPrompt = designMatch[1].trim();
+            actionsPrompt =
+              customPrompt?.replace(/Design Style:\s*.+?(?:\n|$)/, "").trim() ||
+              "";
+          } else {
+            actionsPrompt = customPrompt || "";
+          }
+
+          // Enhance prompts using skill
+          const enhancedActions = enhanceActionsPrompt(actionsPrompt, skill);
+          const enhancedDesign = designPrompt
+            ? enhanceDesignPrompt(designPrompt, skill)
+            : "";
+
+          // Combine enhanced prompts
+          const parts: string[] = [];
+          if (enhancedActions) parts.push(enhancedActions);
+          if (enhancedDesign)
+            parts.push("Design Requirements:\n" + enhancedDesign);
+
+          finalPrompt = parts.join("\n\n");
+          console.log("[uigenai] Enhanced prompt length:", finalPrompt.length);
+        }
+      }
 
       let session: Session;
       if (reuseSessionId) {
@@ -640,7 +707,7 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
               mode,
               provider: selectedProvider,
               model: selectedModel,
-              customPrompt: customPrompt || undefined,
+              customPrompt: finalPrompt || undefined,
             }),
         );
       }
