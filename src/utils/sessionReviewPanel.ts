@@ -11,6 +11,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { Session, sessionsApi } from "../api/sessions.api";
+import { apisApi } from "../api/apis.api";
 import {
   GeneratedFile,
   parseSessionOutputToFiles,
@@ -33,8 +34,19 @@ import { escapeHtml } from "./html";
 export async function showSessionReviewPanel(
   projectId: string,
   sessionId: string,
+  opts?: {
+    apiId?: string;
+    enableMarkReady?: boolean;
+    onMarkedReady?: () => void;
+  },
 ): Promise<void> {
-  const session = await sessionsApi.getById(projectId, sessionId);
+  // Use API-scoped endpoint if apiId is provided and projectId is empty
+  let session: Session;
+  if (opts?.apiId && !projectId) {
+    session = await apisApi.getSession(opts.apiId, sessionId);
+  } else {
+    session = await sessionsApi.getById(projectId, sessionId);
+  }
 
   // Parse files from the session output
   const files = session.output_summary_md
@@ -44,11 +56,17 @@ export async function showSessionReviewPanel(
   // Determine display summary — hide if it looks like serialized data
   let summaryText = "";
   if (session.output_summary_md) {
-    if (files.length > 0 && looksLikeSerializedPayload(session.output_summary_md)) {
+    if (
+      files.length > 0 &&
+      looksLikeSerializedPayload(session.output_summary_md)
+    ) {
       // Try to extract summary_md from the JSON envelope
       try {
         const envelope = JSON.parse(session.output_summary_md);
-        if (envelope.summary_md && !looksLikeSerializedPayload(envelope.summary_md)) {
+        if (
+          envelope.summary_md &&
+          !looksLikeSerializedPayload(envelope.summary_md)
+        ) {
           summaryText = envelope.summary_md;
         }
       } catch {
@@ -83,6 +101,36 @@ export async function showSessionReviewPanel(
             vscode.window.showErrorMessage(status.message);
           }
           panel.webview.postMessage({ type: "status", ...status });
+          break;
+        }
+
+        case "markReady": {
+          if (!opts?.enableMarkReady || !opts?.apiId) {
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: "Mark Ready to Deploy is unavailable for this session.",
+            });
+            break;
+          }
+          try {
+            await apisApi.markReadyToDeploy(opts.apiId);
+            panel.webview.postMessage({
+              type: "status",
+              level: "success",
+              message: "API marked Ready to Deploy.",
+            });
+            vscode.window.showInformationMessage("API marked Ready to Deploy.");
+            opts.onMarkedReady?.();
+            vscode.commands.executeCommand("uigenai.refreshSidebar");
+          } catch (e: any) {
+            const err = e?.message || e?.response?.data?.message || String(e);
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: `Failed: ${err}`,
+            });
+          }
           break;
         }
 
@@ -130,7 +178,12 @@ export async function showSessionReviewPanel(
             "Delete",
           );
           if (answer === "Delete") {
-            await sessionsApi.delete(projectId, sessionId);
+            // Use API-scoped endpoint if apiId is provided and projectId is empty
+            if (opts?.apiId && !projectId) {
+              await apisApi.deleteSession(opts.apiId, sessionId);
+            } else {
+              await sessionsApi.delete(projectId, sessionId);
+            }
             vscode.window.showInformationMessage("Session deleted.");
             panel.dispose();
             // Refresh the sidebar to reflect deletion
@@ -144,7 +197,12 @@ export async function showSessionReviewPanel(
     }
   });
 
-  panel.webview.html = buildReviewHtml(session, files, summaryText);
+  panel.webview.html = buildReviewHtml(
+    session,
+    files,
+    summaryText,
+    opts?.enableMarkReady ?? false,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +218,12 @@ interface TreeNode {
 }
 
 function buildFileTree(files: GeneratedFile[]): TreeNode {
-  const root: TreeNode = { name: "", fullPath: "", isFile: false, children: [] };
+  const root: TreeNode = {
+    name: "",
+    fullPath: "",
+    isFile: false,
+    children: [],
+  };
 
   for (let i = 0; i < files.length; i++) {
     const parts = files[i].path.split("/");
@@ -233,10 +296,22 @@ function renderTreeHtml(node: TreeNode, depth: number = 0): string {
 function getFileIcon(name: string): string {
   const ext = path.extname(name).toLowerCase();
   const map: Record<string, string> = {
-    ".ts": "🟦", ".tsx": "⚛️", ".js": "🟨", ".jsx": "⚛️",
-    ".css": "🎨", ".scss": "🎨", ".html": "🌐", ".json": "📋",
-    ".md": "📝", ".svg": "🖼️", ".png": "🖼️", ".jpg": "🖼️",
-    ".yml": "⚙️", ".yaml": "⚙️", ".env": "🔑", ".lock": "🔒",
+    ".ts": "🟦",
+    ".tsx": "⚛️",
+    ".js": "🟨",
+    ".jsx": "⚛️",
+    ".css": "🎨",
+    ".scss": "🎨",
+    ".html": "🌐",
+    ".json": "📋",
+    ".md": "📝",
+    ".svg": "🖼️",
+    ".png": "🖼️",
+    ".jpg": "🖼️",
+    ".yml": "⚙️",
+    ".yaml": "⚙️",
+    ".env": "🔑",
+    ".lock": "🔒",
   };
   return map[ext] || "📄";
 }
@@ -245,6 +320,7 @@ function buildReviewHtml(
   session: Session,
   files: GeneratedFile[],
   summary: string,
+  canMarkReady: boolean,
 ): string {
   const hasFiles = files.length > 0;
   const tree = hasFiles ? buildFileTree(files) : null;
@@ -252,10 +328,13 @@ function buildReviewHtml(
 
   const createdDate = new Date(session.created_at).toLocaleString();
   const statusClass =
-    session.status === "SUCCEEDED" ? "st-ok"
-    : session.status === "FAILED" ? "st-err"
-    : session.status === "RUNNING" ? "st-run"
-    : "st-queue";
+    session.status === "SUCCEEDED"
+      ? "st-ok"
+      : session.status === "FAILED"
+        ? "st-err"
+        : session.status === "RUNNING"
+          ? "st-run"
+          : "st-queue";
 
   // Sanitize file data for the webview
   const filesJson = hasFiles
@@ -351,23 +430,31 @@ body{font-family:'Segoe UI',sans-serif;background:#1e1e1e;color:#ccc;height:100v
 </div>
 
 <!-- Actions -->
-${hasFiles ? `
+${
+  hasFiles
+    ? `
 <div class="actions">
   <button class="btn btn-primary" onclick="action('applyAll')">📁 Apply All</button>
   <button class="btn btn-secondary" onclick="action('download')">⬇️ Download ZIP</button>
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
-` : `
+`
+    : `
 <div class="actions">
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
-`}
+`
+}
 
 ${summary && !hasFiles ? `<div class="summary">${escapeHtml(summary)}</div>` : ""}
 ${summary && hasFiles ? `<div class="summary">${escapeHtml(summary)}</div>` : ""}
 
 <!-- Main content -->
-${hasFiles ? `
+${
+  hasFiles
+    ? `
 <div class="main">
   <!-- Tree -->
   <div class="tree-panel">
@@ -386,14 +473,16 @@ ${hasFiles ? `
     </div>
   </div>
 </div>
-` : `
+`
+    : `
 <div class="fallback">
   ${session.status === "SUCCEEDED" ? `<div class="fallback-content">${escapeHtml(session.output_summary_md || "No output available.")}</div>` : ""}
   ${session.status === "FAILED" ? `<div class="fallback-content" style="color:#f44747">${escapeHtml(session.error_message || "Generation failed.")}</div>` : ""}
   ${session.status === "RUNNING" ? `<div class="fallback-content">Generation is still running. Check back shortly.</div>` : ""}
   ${session.status === "QUEUED" ? `<div class="fallback-content">This session is queued and hasn't started yet.</div>` : ""}
 </div>
-`}
+`
+}
 
 <script>
 const vscode = acquireVsCodeApi();

@@ -12,6 +12,7 @@ import { createDeploymentCmd } from "./commands/deploymentCommands";
 import { generateCmd } from "./commands/generateCommand";
 import { directGenerateCmd } from "./commands/directGenerateCommand";
 import { advancedGenerateCmd } from "./commands/advancedGenerateCommand";
+import { previewGenerateCmd } from "./commands/previewGenerateCommand";
 
 let auth: AuthManager;
 
@@ -109,6 +110,7 @@ export async function activate(context: vscode.ExtensionContext) {
   reg("uigenai.createDeployment", () => createDeploymentCmd());
   reg("uigenai.directGenerate", () => directGenerateCmd(context));
   reg("uigenai.advancedGenerate", () => advancedGenerateCmd(context));
+  reg("uigenai.previewGenerate", () => previewGenerateCmd(context));
   reg("uigenai.refreshSidebar", () => dashboardProvider.refresh());
 }
 

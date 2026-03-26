@@ -17,6 +17,11 @@
   "contributes": {
     "commands": [
       {
+        "command": "uigenai.previewGenerate",
+        "title": "UI Gen AI: Preview & Generate",
+        "icon": "$(eye)"
+      },
+      {
         "command": "uigenai.directGenerate",
         "title": "UI Gen AI: Generate from Swagger / OpenAPI",
         "icon": "$(zap)"
@@ -129,6 +134,33 @@
           "type": "string",
           "default": "https://api.openai.com/v1",
           "description": "OpenAI-compatible API base URL"
+        },
+        "uigenai.vercelToken": {
+          "type": "string",
+          "default": "",
+          "description": "Vercel API Token for deployment",
+          "markdownDescription": "Get your token at [vercel.com/account/tokens](https://vercel.com/account/tokens)"
+        },
+        "uigenai.netlifyToken": {
+          "type": "string",
+          "default": "",
+          "description": "Netlify Auth Token for deployment",
+          "markdownDescription": "Get your token at [app.netlify.com/user/applications](https://app.netlify.com/user/applications)"
+        },
+        "uigenai.defaultDeployPlatform": {
+          "type": "string",
+          "enum": [
+            "vercel",
+            "netlify",
+            "zip"
+          ],
+          "default": "zip",
+          "description": "Default deployment platform"
+        },
+        "uigenai.validateBeforeDeploy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate code before deployment"
         }
       }
     }
