@@ -6,6 +6,7 @@
  * - Manages state transitions
  * - Routes to appropriate provider
  * - Tracks deployment progress and results
+ * - Prevents duplicate deployments (idempotent)
  */
 
 import * as vscode from "vscode";
@@ -19,6 +20,8 @@ import {
   ProviderConfig,
   PROVIDER_INFO,
   canDeploy,
+  isDeploymentInProgress,
+  isDeployed,
 } from "./types";
 import {
   getProvider,
@@ -34,9 +37,20 @@ import { parseSessionOutputToFiles } from "../utils/previewPanel";
 import "./providers";
 
 /**
- * Active deployment jobs (in-memory tracking)
+ * Active deployment jobs (in-memory tracking by apiId)
  */
 const activeJobs = new Map<string, DeploymentJob>();
+
+/**
+ * In-flight deployment requests (to prevent duplicate concurrent calls)
+ * Tracks startedAt to clean up stale entries that never resolved.
+ */
+const inFlightDeployments = new Map<
+  string,
+  { promise: Promise<DeploymentResult>; startedAt: number }
+>();
+
+const IN_FLIGHT_STALE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Progress callbacks for active deployments
@@ -47,7 +61,10 @@ const progressCallbacks = new Map<
 >();
 
 /**
- * Start a new deployment
+ * Start a new deployment (idempotent)
+ * 
+ * If a deployment is already in progress for this API, returns immediately
+ * without starting a duplicate deployment.
  */
 export async function startDeployment(
   apiId: string,
@@ -55,6 +72,21 @@ export async function startDeployment(
   config: Partial<ProviderConfig>,
   onProgress?: (progress: DeploymentProgress) => void,
 ): Promise<DeploymentResult> {
+  // Clean up stale in-flight entries
+  for (const [key, entry] of inFlightDeployments.entries()) {
+    if (Date.now() - entry.startedAt > IN_FLIGHT_STALE_TTL_MS) {
+      console.log(`[deployment] Cleaning stale in-flight entry for apiId=${key}`);
+      inFlightDeployments.delete(key);
+    }
+  }
+
+  // Check for in-flight deployment (same request in progress)
+  const inFlight = inFlightDeployments.get(apiId);
+  if (inFlight) {
+    console.log(`[deployment] Returning in-flight deployment for apiId=${apiId}`);
+    return inFlight.promise;
+  }
+
   // Validate provider is registered
   if (!hasProvider(provider)) {
     return {
@@ -66,9 +98,49 @@ export async function startDeployment(
     };
   }
 
+  // Create and track the deployment promise
+  const deploymentPromise = executeStartDeployment(apiId, provider, config, onProgress);
+  inFlightDeployments.set(apiId, { promise: deploymentPromise, startedAt: Date.now() });
+
+  try {
+    const result = await deploymentPromise;
+    return result;
+  } finally {
+    inFlightDeployments.delete(apiId);
+  }
+}
+
+/**
+ * Internal deployment execution
+ */
+async function executeStartDeployment(
+  apiId: string,
+  provider: DeploymentProvider,
+  config: Partial<ProviderConfig>,
+  onProgress?: (progress: DeploymentProgress) => void,
+): Promise<DeploymentResult> {
   try {
     // Step 1: Get API and validate state
     const api = await apisApi.getById(apiId);
+    
+    // Handle idempotent cases
+    if (isDeploymentInProgress(api.workflow_state)) {
+      console.log(`[deployment] Deployment already in progress for apiId=${apiId}, state=${api.workflow_state}`);
+      return {
+        success: true,
+        provider,
+        state: DeploymentState.DEPLOYING,
+        error: undefined,
+        errorCode: "DEPLOYMENT_IN_PROGRESS",
+      };
+    }
+
+    if (isDeployed(api.workflow_state)) {
+      console.log(`[deployment] API already deployed, apiId=${apiId}`);
+      // For already deployed APIs, we allow redeployment
+      // but we should inform the caller
+    }
+
     if (!canDeploy(api.workflow_state)) {
       return {
         success: false,
@@ -230,7 +302,7 @@ async function finalizeDeployment(
   deploymentId: string,
   result: DeploymentResult,
 ): Promise<void> {
-  const newState: WorkflowState = result.success ? "DEPLOYED" : "DEPLOY_FAILED";
+  const newState: WorkflowState = result.success ? "DEPLOYED" : "FAILED";
   const deploymentStatus = result.success ? "DEPLOYED" : "FAILED";
 
   try {
@@ -255,17 +327,76 @@ async function finalizeDeployment(
 
 /**
  * Get generated files for an API
- * 
+ *
  * Tries two sources in order:
- * 1. generated_codes table (legacy storage)
- * 2. Latest FULL_SOURCE session's output_summary_md (current flow)
+ * 1. Latest FULL_SOURCE session's output_summary_md (current source of truth)
+ * 2. generated_codes table (legacy storage)
+ *
+ * NOTE: listSessions may not include output_summary_md in the response,
+ * so we must fetch the full session details using getSession().
  */
 async function getGeneratedFiles(apiId: string): Promise<GeneratedFile[]> {
-  // Strategy 1: Try generated_codes table
+  // Strategy 1: Prefer latest FULL_SOURCE session output (current source of truth)
+  try {
+    const sessions = await apisApi.listSessions(apiId, "FULL_SOURCE");
+
+    // Find the most recent successful session (listSessions may not include output_summary_md)
+    const successfulSessions = sessions
+      .filter((s: any) => s.status === "SUCCEEDED")
+      .sort(
+        (a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+
+    if (successfulSessions.length > 0) {
+      const latestSessionSummary = successfulSessions[0];
+      console.log(
+        "[deployment] Found FULL_SOURCE session:",
+        latestSessionSummary.id,
+      );
+
+      // Fetch full session details to get output_summary_md
+      const fullSession = await apisApi.getSession(
+        apiId,
+        latestSessionSummary.id,
+      );
+
+      if (fullSession.output_summary_md) {
+        console.log("[deployment] Fetched full session with output_summary_md");
+        const files = parseSessionOutputToFiles(fullSession.output_summary_md);
+        if (files.length > 0) {
+          console.log(
+            "[deployment] Parsed files from session output:",
+            files.length,
+          );
+          return files.map((f) => ({
+            path: f.path,
+            content: f.content,
+            lang: f.lang || undefined,
+          }));
+        } else {
+          console.log(
+            "[deployment] parseSessionOutputToFiles returned 0 files",
+          );
+        }
+      } else {
+        console.log("[deployment] Session has no output_summary_md");
+      }
+    } else {
+      console.log("[deployment] No successful FULL_SOURCE sessions found");
+    }
+  } catch (e) {
+    console.log("[deployment] FULL_SOURCE lookup failed:", e);
+  }
+
+  // Strategy 2: Fallback to generated_codes table (legacy storage)
   try {
     const codes = await generatedCodesApi.list(apiId);
     if (codes && codes.length > 0) {
-      console.log("[deployment] Found files in generated_codes table:", codes.length);
+      console.log(
+        "[deployment] Found files in generated_codes table:",
+        codes.length,
+      );
       return codes.map((code) => ({
         path: code.file_path,
         content: code.content,
@@ -273,36 +404,7 @@ async function getGeneratedFiles(apiId: string): Promise<GeneratedFile[]> {
       }));
     }
   } catch (e) {
-    console.log("[deployment] generated_codes lookup failed, trying session fallback");
-  }
-
-  // Strategy 2: Get latest FULL_SOURCE session and parse its output
-  try {
-    const sessions = await apisApi.listSessions(apiId, "FULL_SOURCE");
-    
-    // Find the most recent successful session
-    const successfulSessions = sessions
-      .filter((s: any) => s.status === "SUCCEEDED" && s.output_summary_md)
-      .sort((a: any, b: any) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-    if (successfulSessions.length > 0) {
-      const latestSession = successfulSessions[0];
-      console.log("[deployment] Using FULL_SOURCE session:", latestSession.id);
-      
-      const files = parseSessionOutputToFiles(latestSession.output_summary_md);
-      if (files.length > 0) {
-        console.log("[deployment] Parsed files from session output:", files.length);
-        return files.map((f) => ({
-          path: f.path,
-          content: f.content,
-          lang: f.lang || undefined,
-        }));
-      }
-    }
-  } catch (e) {
-    console.error("[deployment] Session fallback failed:", e);
+    console.error("[deployment] generated_codes fallback failed:", e);
   }
 
   console.error("[deployment] No generated files found from any source");

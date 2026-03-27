@@ -29,16 +29,43 @@ export enum DeploymentState {
 
 /**
  * API workflow states (mirrors backend)
+ *
+ * State Machine:
+ * - CONFIGURED → UI_GENERATED → CODE_GENERATED → READY_TO_DEPLOY → DEPLOY_QUEUED → DEPLOYING → DEPLOYED
+ *                                                                                              ↓
+ *                                                                                        DEPLOY_FAILED
+ *                                                                                              ↓
+ *                                                                               (retry) → DEPLOYING
  */
 export type WorkflowState =
   | "CONFIGURED"
   | "UI_GENERATED"
   | "CODE_GENERATED"
   | "READY_TO_DEPLOY"
+  | "DEPLOY_QUEUED"
   | "DEPLOYING"
   | "DEPLOYED"
   | "DEPLOY_FAILED"
+  | "FAILED"
   | null;
+
+/**
+ * States that allow deployment to start
+ */
+export const DEPLOYABLE_STATES: WorkflowState[] = [
+  "CODE_GENERATED",
+  "READY_TO_DEPLOY",
+  "DEPLOY_FAILED",
+  "FAILED",
+];
+
+/**
+ * States that indicate deployment is in progress
+ */
+export const DEPLOYMENT_IN_PROGRESS_STATES: WorkflowState[] = [
+  "DEPLOY_QUEUED",
+  "DEPLOYING",
+];
 
 /**
  * Generated file from code generation session
@@ -187,7 +214,14 @@ export const PROVIDER_INFO: Record<DeploymentProvider, ProviderInfo> = {
  * Check if a workflow state allows deployment
  */
 export function canDeploy(state: WorkflowState): boolean {
-  return state === "READY_TO_DEPLOY" || state === "DEPLOY_FAILED";
+  return DEPLOYABLE_STATES.includes(state);
+}
+
+/**
+ * Check if a workflow state indicates deployment is in progress
+ */
+export function isDeploymentInProgress(state: WorkflowState): boolean {
+  return DEPLOYMENT_IN_PROGRESS_STATES.includes(state);
 }
 
 /**
@@ -201,7 +235,14 @@ export function isDeployed(state: WorkflowState): boolean {
  * Check if a workflow state indicates deployment is in progress
  */
 export function isDeploying(state: WorkflowState): boolean {
-  return state === "DEPLOYING";
+  return state === "DEPLOYING" || state === "DEPLOY_QUEUED";
+}
+
+/**
+ * Check if deployment failed
+ */
+export function isDeployFailed(state: WorkflowState): boolean {
+  return state === "DEPLOY_FAILED" || state === "FAILED";
 }
 
 /**

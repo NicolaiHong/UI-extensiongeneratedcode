@@ -4,7 +4,13 @@ import { getServerUrl } from "../api/client";
 import { projectsApi, Project } from "../api/projects.api";
 import { documentsApi, DocumentType } from "../api/documents.api";
 import { sessionsApi, Session } from "../api/sessions.api";
-import { apisApi, Api } from "../api/apis.api";
+import {
+  apisApi,
+  Api,
+  DEPLOYABLE_STATES,
+  DEPLOYMENT_IN_PROGRESS_STATES,
+  READY_OR_BEYOND_STATES,
+} from "../api/apis.api";
 import { apiConfigsApi, ApiConfig } from "../api/apiConfigs.api";
 import { uiSchemasApi, UiSchema } from "../api/uiSchemas.api";
 import { generatedCodesApi, GeneratedCode } from "../api/generatedCodes.api";
@@ -23,6 +29,11 @@ import {
   enhanceDesignPrompt,
   UI_UX_PRO_MAX_SKILL,
 } from "../utils/skillLoader";
+
+/**
+ * Track in-progress operations to prevent duplicate execution
+ */
+const inProgressOperations = new Map<string, boolean>();
 
 export class DashboardProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "uigenai.dashboard";
@@ -840,25 +851,33 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       vscode.window.showErrorMessage("Select an API first.");
       return;
     }
+
+    // Prevent duplicate execution
+    const opKey = `markReady:${apiId}`;
+    if (inProgressOperations.get(opKey)) {
+      console.log("[uigenai] _markApiReady already in progress for:", apiId);
+      return;
+    }
+
     try {
-      // Get current API state
+      inProgressOperations.set(opKey, true);
+
+      // Get current API state (always fetch fresh state)
       const api = await apisApi.getById(apiId);
-      
+
       // Check if already in a deploy-ready or later state (idempotent)
-      if (
-        api.workflow_state === "READY_TO_DEPLOY" ||
-        api.workflow_state === "DEPLOYING" ||
-        api.workflow_state === "DEPLOYED" ||
-        api.workflow_state === "DEPLOY_FAILED"
-      ) {
-        console.log("[uigenai] API is already ready/deployed, state:", api.workflow_state);
-        vscode.window.showInformationMessage(
-          api.workflow_state === "DEPLOYED" 
-            ? "API is already deployed."
-            : api.workflow_state === "DEPLOYING"
-              ? "Deployment is in progress."
-              : "API is already ready to deploy."
+      if (READY_OR_BEYOND_STATES.includes(api.workflow_state)) {
+        console.log(
+          "[uigenai] API is already ready/deployed, state:",
+          api.workflow_state,
         );
+        const message =
+          api.workflow_state === "DEPLOYED"
+            ? "API is already deployed."
+            : DEPLOYMENT_IN_PROGRESS_STATES.includes(api.workflow_state)
+              ? "Deployment is in progress."
+              : "API is already ready to deploy.";
+        vscode.window.showInformationMessage(message);
         await this._loadApiWorkflow(apiId);
         return;
       }
@@ -872,6 +891,8 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     } catch (e: unknown) {
       console.error("[uigenai] _markApiReady error:", e);
       vscode.window.showErrorMessage(extractApiError(e));
+    } finally {
+      inProgressOperations.delete(opKey);
     }
   }
 
@@ -881,22 +902,62 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       vscode.window.showErrorMessage("Select an API first.");
       return;
     }
+
+    // Prevent duplicate execution
+    const opKey = `deploy:${apiId}`;
+    if (inProgressOperations.get(opKey)) {
+      console.log("[uigenai] _deployApi already in progress for:", apiId);
+      vscode.window.showInformationMessage("Deployment is already in progress.");
+      return;
+    }
+
     try {
-      const { quickDeploy } = await import("../deployment/deploymentOrchestrator");
+      inProgressOperations.set(opKey, true);
+
+      // Get fresh API state before deploying
+      const api = await apisApi.getById(apiId);
+
+      // Handle idempotent cases
+      if (DEPLOYMENT_IN_PROGRESS_STATES.includes(api.workflow_state)) {
+        console.log("[uigenai] Deployment already in progress, state:", api.workflow_state);
+        vscode.window.showInformationMessage("Deployment is already in progress.");
+        await this._loadApiWorkflow(apiId);
+        return;
+      }
+
+      // Check if can deploy
+      if (!DEPLOYABLE_STATES.includes(api.workflow_state) && api.workflow_state !== "DEPLOYED") {
+        vscode.window.showErrorMessage(
+          `Cannot deploy: API is in state "${api.workflow_state}". Generate full source first.`
+        );
+        return;
+      }
+
+      const { quickDeploy } =
+        await import("../deployment/deploymentOrchestrator");
       const result = await quickDeploy(apiId);
-      
+
       if (result) {
         if (result.success) {
-          vscode.window.showInformationMessage(
-            `Deployed successfully! URL: ${result.url}`,
-            "Open URL"
-          ).then((action) => {
-            if (action === "Open URL" && result.url) {
-              vscode.env.openExternal(vscode.Uri.parse(result.url));
-            }
-          });
+          vscode.window
+            .showInformationMessage(
+              `Deployed successfully! URL: ${result.url}`,
+              "Open URL",
+            )
+            .then((action) => {
+              if (action === "Open URL" && result.url) {
+                vscode.env.openExternal(vscode.Uri.parse(result.url));
+              }
+            });
+        } else if (result.errorCode === "DEPLOYMENT_IN_PROGRESS") {
+          // Idempotent case - deployment already running
+          vscode.window.showInformationMessage("Deployment is already in progress.");
         } else {
-          vscode.window.showErrorMessage(`Deployment failed: ${result.error}`);
+          await this._handleDeploymentFailure(
+            apiId,
+            result.error,
+            result.errorCode,
+          );
         }
         await this._loadApiWorkflow(apiId);
         vscode.commands.executeCommand("uigenai.refreshSidebar");
@@ -904,7 +965,80 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
     } catch (e: unknown) {
       console.error("[uigenai] _deployApi error:", e);
       vscode.window.showErrorMessage(extractApiError(e));
+    } finally {
+      inProgressOperations.delete(opKey);
     }
+  }
+
+  private async _handleDeploymentFailure(
+    apiId: string,
+    error?: string,
+    errorCode?: string,
+  ): Promise<void> {
+    const summary = errorCode
+      ? `${error || "Unknown error"} (${errorCode})`
+      : error || "Unknown error";
+    const action = await vscode.window.showErrorMessage(
+      `Deployment failed: ${summary}`,
+      "Retry Deployment",
+      "Review Full Source",
+      "Ask AI to Help",
+    );
+
+    if (action === "Retry Deployment") {
+      await this._deployApi(apiId);
+      return;
+    }
+
+    if (action === "Review Full Source") {
+      await this._openLatestFullSourceSession(apiId);
+      return;
+    }
+
+    if (action === "Ask AI to Help") {
+      const prompt = [
+        "Deployment failed. Help me diagnose and fix the generated source before retrying deployment.",
+        `API ID: ${apiId}`,
+        `Error: ${error || "Unknown error"}`,
+        errorCode ? `Error code: ${errorCode}` : "",
+        "Please suggest the minimal patch and explain how to verify the fix.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      await vscode.env.clipboard.writeText(prompt);
+      await this._openLatestFullSourceSession(apiId);
+
+      vscode.window
+        .showInformationMessage(
+          "Copied deployment-failure context to clipboard for AI assistance.",
+          "Open Chat",
+        )
+        .then((pick) => {
+          if (pick === "Open Chat") {
+            vscode.commands.executeCommand("workbench.action.chat.open");
+          }
+        });
+    }
+  }
+
+  private async _openLatestFullSourceSession(apiId: string): Promise<void> {
+    const sessions = await apisApi.listSessions(apiId, "FULL_SOURCE");
+    const successful = sessions
+      .filter((s: any) => s.status === "SUCCEEDED")
+      .sort(
+        (a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+
+    if (successful.length === 0) {
+      vscode.window.showWarningMessage(
+        "No successful full source session found. Generate full source first.",
+      );
+      return;
+    }
+
+    await this._reviewSession(apiId, successful[0].id, "FULL_SOURCE");
   }
 
   private async _reviewSession(
@@ -1552,45 +1686,6 @@ ${
     <div id="apis-list"></div>
   </div>
 </div>
-
-<!-- Code History Section -->
-<div class="section" id="sec-code-history">
-  <div class="sec-hd" onclick="toggleSec('code-history')">
-    <h3>Code History</h3>
-    <span class="arrow" id="arrow-code-history">&#9654;</span>
-  </div>
-  <div class="sec-body" id="body-code-history">
-    <div class="ch-filters" style="margin-bottom:8px">
-      <div style="display:flex;gap:6px;margin-bottom:6px">
-        <input type="text" id="ch-search" placeholder="Search file path..."
-          style="flex:1;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px"
-          onkeyup="if(event.key==='Enter')loadCodeHistory(1)">
-        <button class="btn-p" onclick="loadCodeHistory(1)" style="padding:6px 10px">Search</button>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <select id="ch-api-filter" style="flex:1;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px" onchange="loadCodeHistory(1)">
-          <option value="">All APIs</option>
-        </select>
-        <select id="ch-language-filter" style="width:100px;padding:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:11px" onchange="loadCodeHistory(1)">
-          <option value="">All</option>
-          <option value="typescript">TS</option>
-          <option value="javascript">JS</option>
-          <option value="html">HTML</option>
-          <option value="css">CSS</option>
-        </select>
-      </div>
-    </div>
-    <div class="empty" id="ch-loading" style="display:none"><span class="spin">⟳</span> Loading...</div>
-    <div id="ch-list"></div>
-    <div id="ch-pagination" style="display:none;margin-top:8px;display:flex;justify-content:space-between;align-items:center;font-size:11px">
-      <span id="ch-page-info" style="color:var(--text2)"></span>
-      <div style="display:flex;gap:4px">
-        <button class="btn-s" id="ch-prev" onclick="loadCodeHistory(chCurrentPage-1)">Prev</button>
-        <button class="btn-s" id="ch-next" onclick="loadCodeHistory(chCurrentPage+1)">Next</button>
-      </div>
-    </div>
-  </div>
-</div>
 `
     : `<div style="padding:16px 10px;text-align:center;color:var(--text2)">Login to view your APIs.</div>`
 }
@@ -2137,15 +2232,20 @@ function renderWorkflow(payload) {
 
   workflowLatest = { preview: payload.preview, full: payload.full };
 
-  const state = (payload.api.workflow_state || "CONFIGURED").replace(/_/g, " ");
-  const badgeClass =
-    payload.api.workflow_state === "READY_TO_DEPLOY"
-      ? "wf-badge ok"
-      : payload.api.workflow_state === "CODE_GENERATED"
-        ? "wf-badge info"
-        : payload.api.workflow_state === "FAILED"
-          ? "wf-badge err"
-          : "wf-badge warn";
+  const workflowState = payload.api.workflow_state || "CONFIGURED";
+  const state = workflowState.replace(/_/g, " ");
+  
+  // Determine badge class based on state
+  const getBadgeClass = (s) => {
+    if (s === "DEPLOYED") return "wf-badge ok";
+    if (s === "READY_TO_DEPLOY") return "wf-badge ok";
+    if (s === "CODE_GENERATED") return "wf-badge info";
+    if (s === "DEPLOYING" || s === "DEPLOY_QUEUED") return "wf-badge info";
+    if (s === "FAILED" || s === "DEPLOY_FAILED") return "wf-badge err";
+    return "wf-badge warn";
+  };
+  const badgeClass = getBadgeClass(workflowState);
+  
   if (stateEl) {
     stateEl.textContent = state;
     stateEl.className = badgeClass;
@@ -2157,18 +2257,21 @@ function renderWorkflow(payload) {
   const fullReady =
     Boolean(payload.preview) && payload.preview.status === "SUCCEEDED";
   const markReadyReady =
-    payload.api.workflow_state === "CODE_GENERATED" &&
+    workflowState === "CODE_GENERATED" &&
     Boolean(payload.full) &&
     payload.full.status === "SUCCEEDED";
   
-  // Deploy button is enabled when API is READY_TO_DEPLOY or DEPLOY_FAILED
-  const canDeploy = 
-    payload.api.workflow_state === "READY_TO_DEPLOY" ||
-    payload.api.workflow_state === "DEPLOY_FAILED";
+  // Deployable states: CODE_GENERATED, READY_TO_DEPLOY, DEPLOY_FAILED, FAILED
+  const deployableStates = ["CODE_GENERATED", "READY_TO_DEPLOY", "DEPLOY_FAILED", "FAILED"];
+  const canDeploy = deployableStates.includes(workflowState);
+  
+  // In-progress states
+  const deploymentInProgressStates = ["DEPLOY_QUEUED", "DEPLOYING"];
+  const isDeployInProgress = deploymentInProgressStates.includes(workflowState);
   
   // Check if already deployed
-  const isDeployed = payload.api.workflow_state === "DEPLOYED";
-  const isDeploying = payload.api.workflow_state === "DEPLOYING";
+  const isDeployed = workflowState === "DEPLOYED";
+  const isDeployFailed = workflowState === "DEPLOY_FAILED" || workflowState === "FAILED";
 
   if (btnPreview) {
     btnPreview.disabled = !previewReady;
@@ -2181,8 +2284,9 @@ function renderWorkflow(payload) {
       : \`Disabled: \${!payload.preview ? 'No preview session exists' : 'Preview status is ' + payload.preview.status + ' (needs SUCCEEDED)'}\`;
   }
   if (btnReady) {
-    // Hide mark ready button if already ready or deployed
-    const hideReady = canDeploy || isDeployed || isDeploying;
+    // Hide mark ready button if already in ready or later state
+    const readyOrBeyondStates = ["READY_TO_DEPLOY", "DEPLOY_QUEUED", "DEPLOYING", "DEPLOYED", "DEPLOY_FAILED", "FAILED"];
+    const hideReady = readyOrBeyondStates.includes(workflowState);
     btnReady.disabled = !markReadyReady || hideReady;
     btnReady.style.display = hideReady ? 'none' : '';
     btnReady.title = markReadyReady ? "Mark this API as ready to deploy" : "Run a successful full source generation first";
@@ -2191,15 +2295,21 @@ function renderWorkflow(payload) {
   // Deploy button
   const btnDeploy = document.getElementById('wf-btn-deploy');
   if (btnDeploy) {
-    btnDeploy.disabled = !canDeploy || isDeploying;
-    btnDeploy.style.display = (canDeploy || isDeployed || isDeploying) ? '' : 'none';
-    if (isDeploying) {
+    // Show deploy button if can deploy, already deployed, or in progress
+    const showDeploy = canDeploy || isDeployed || isDeployInProgress;
+    btnDeploy.style.display = showDeploy ? '' : 'none';
+    btnDeploy.disabled = isDeployInProgress;
+    
+    if (isDeployInProgress) {
       btnDeploy.textContent = '⏳ Deploying...';
       btnDeploy.title = 'Deployment in progress';
     } else if (isDeployed) {
       btnDeploy.textContent = '🔄 Redeploy';
       btnDeploy.title = 'Deploy again to a provider';
       btnDeploy.disabled = false;
+    } else if (isDeployFailed) {
+      btnDeploy.textContent = '🔁 Retry Deploy';
+      btnDeploy.title = 'Retry deployment after fixing issues';
     } else {
       btnDeploy.textContent = '🚀 Deploy';
       btnDeploy.title = 'Deploy to Vercel, Render, or GitHub Pages';

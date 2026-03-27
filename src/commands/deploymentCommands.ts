@@ -158,6 +158,22 @@ async function deployToProvider(
     return;
   }
 
+  // Re-check API state just before deploying (guard against stale state)
+  const freshApi = await apisApi.getById(targetApiId);
+  if (apisApi.isDeploymentInProgress(freshApi)) {
+    vscode.window.showInformationMessage(
+      `Deployment already in progress (state: ${freshApi.workflow_state}).`,
+    );
+    vscode.commands.executeCommand("uigenai.refreshSidebar");
+    return;
+  }
+  if (!apisApi.canDeploy(freshApi)) {
+    vscode.window.showWarningMessage(
+      `Cannot deploy: API is in state "${freshApi.workflow_state}". Generate source code first.`,
+    );
+    return;
+  }
+
   // Deploy
   const result = await deployWithProgress(targetApiId, provider, {
     projectName,
