@@ -463,6 +463,10 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
           console.log("[uigenai] Received markReady message:", msg.apiId);
           await this._markApiReady(msg.apiId);
           break;
+        case "deployApi":
+          console.log("[uigenai] Received deployApi message:", msg.apiId);
+          await this._deployApi(msg.apiId);
+          break;
 
         /* ---- Session Review/Delete ---- */
         case "reviewPreviewSession":
@@ -837,6 +841,28 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
+      // Get current API state
+      const api = await apisApi.getById(apiId);
+      
+      // Check if already in a deploy-ready or later state (idempotent)
+      if (
+        api.workflow_state === "READY_TO_DEPLOY" ||
+        api.workflow_state === "DEPLOYING" ||
+        api.workflow_state === "DEPLOYED" ||
+        api.workflow_state === "DEPLOY_FAILED"
+      ) {
+        console.log("[uigenai] API is already ready/deployed, state:", api.workflow_state);
+        vscode.window.showInformationMessage(
+          api.workflow_state === "DEPLOYED" 
+            ? "API is already deployed."
+            : api.workflow_state === "DEPLOYING"
+              ? "Deployment is in progress."
+              : "API is already ready to deploy."
+        );
+        await this._loadApiWorkflow(apiId);
+        return;
+      }
+
       console.log("[uigenai] Marking API as ready to deploy:", apiId);
       await apisApi.markReadyToDeploy(apiId);
       console.log("[uigenai] API marked as ready successfully");
@@ -845,6 +871,38 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
       vscode.commands.executeCommand("uigenai.refreshSidebar");
     } catch (e: unknown) {
       console.error("[uigenai] _markApiReady error:", e);
+      vscode.window.showErrorMessage(extractApiError(e));
+    }
+  }
+
+  private async _deployApi(apiId: string) {
+    console.log("[uigenai] _deployApi called with apiId:", apiId);
+    if (!apiId) {
+      vscode.window.showErrorMessage("Select an API first.");
+      return;
+    }
+    try {
+      const { quickDeploy } = await import("../deployment/deploymentOrchestrator");
+      const result = await quickDeploy(apiId);
+      
+      if (result) {
+        if (result.success) {
+          vscode.window.showInformationMessage(
+            `Deployed successfully! URL: ${result.url}`,
+            "Open URL"
+          ).then((action) => {
+            if (action === "Open URL" && result.url) {
+              vscode.env.openExternal(vscode.Uri.parse(result.url));
+            }
+          });
+        } else {
+          vscode.window.showErrorMessage(`Deployment failed: ${result.error}`);
+        }
+        await this._loadApiWorkflow(apiId);
+        vscode.commands.executeCommand("uigenai.refreshSidebar");
+      }
+    } catch (e: unknown) {
+      console.error("[uigenai] _deployApi error:", e);
       vscode.window.showErrorMessage(extractApiError(e));
     }
   }
@@ -1403,6 +1461,16 @@ ${
       <div class="wf-cta" style="margin-top:12px">
         <button class="btn-p" id="wf-btn-preview" onclick="generatePreview()" style="width:100%;padding:10px;font-size:13px">
           🚀 Generate Preview
+        </button>
+      </div>
+      <div class="wf-cta" style="margin-top:8px">
+        <button class="btn-p" id="wf-btn-ready" onclick="markReady()" style="width:100%;padding:10px;font-size:13px;background:#4ec9b0;display:none">
+          ✅ Mark Ready to Deploy
+        </button>
+      </div>
+      <div class="wf-cta" style="margin-top:8px">
+        <button class="btn-p" id="wf-btn-deploy" onclick="deployApi()" style="width:100%;padding:10px;font-size:13px;background:#6f42c1;display:none">
+          🚀 Deploy
         </button>
       </div>
       <div class="wf-meta" id="wf-status" style="text-align:center;margin-top:8px">Select an OpenAPI file to start</div>
@@ -2092,6 +2160,15 @@ function renderWorkflow(payload) {
     payload.api.workflow_state === "CODE_GENERATED" &&
     Boolean(payload.full) &&
     payload.full.status === "SUCCEEDED";
+  
+  // Deploy button is enabled when API is READY_TO_DEPLOY or DEPLOY_FAILED
+  const canDeploy = 
+    payload.api.workflow_state === "READY_TO_DEPLOY" ||
+    payload.api.workflow_state === "DEPLOY_FAILED";
+  
+  // Check if already deployed
+  const isDeployed = payload.api.workflow_state === "DEPLOYED";
+  const isDeploying = payload.api.workflow_state === "DEPLOYING";
 
   if (btnPreview) {
     btnPreview.disabled = !previewReady;
@@ -2104,8 +2181,29 @@ function renderWorkflow(payload) {
       : \`Disabled: \${!payload.preview ? 'No preview session exists' : 'Preview status is ' + payload.preview.status + ' (needs SUCCEEDED)'}\`;
   }
   if (btnReady) {
-    btnReady.disabled = !markReadyReady;
+    // Hide mark ready button if already ready or deployed
+    const hideReady = canDeploy || isDeployed || isDeploying;
+    btnReady.disabled = !markReadyReady || hideReady;
+    btnReady.style.display = hideReady ? 'none' : '';
     btnReady.title = markReadyReady ? "Mark this API as ready to deploy" : "Run a successful full source generation first";
+  }
+  
+  // Deploy button
+  const btnDeploy = document.getElementById('wf-btn-deploy');
+  if (btnDeploy) {
+    btnDeploy.disabled = !canDeploy || isDeploying;
+    btnDeploy.style.display = (canDeploy || isDeployed || isDeploying) ? '' : 'none';
+    if (isDeploying) {
+      btnDeploy.textContent = '⏳ Deploying...';
+      btnDeploy.title = 'Deployment in progress';
+    } else if (isDeployed) {
+      btnDeploy.textContent = '🔄 Redeploy';
+      btnDeploy.title = 'Deploy again to a provider';
+      btnDeploy.disabled = false;
+    } else {
+      btnDeploy.textContent = '🚀 Deploy';
+      btnDeploy.title = 'Deploy to Vercel, Render, or GitHub Pages';
+    }
   }
 
   // Render sessions lists
@@ -2207,6 +2305,15 @@ function clickReady() {
     return;
   }
   send('markReady', { apiId: selectedApiId });
+}
+
+function deployApi() {
+  console.log('[uigenai][workflow] deployApi called', selectedApiId);
+  if (!selectedApiId) {
+    setWorkflowMessage("Select an API first.");
+    return;
+  }
+  send('deployApi', { apiId: selectedApiId });
 }
 
 function reviewSession(sessionId, mode) {

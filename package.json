@@ -141,6 +141,18 @@
           "description": "Vercel API Token for deployment",
           "markdownDescription": "Get your token at [vercel.com/account/tokens](https://vercel.com/account/tokens)"
         },
+        "uigenai.renderToken": {
+          "type": "string",
+          "default": "",
+          "description": "Render API Key for deployment",
+          "markdownDescription": "Get your API key at [dashboard.render.com/u/settings](https://dashboard.render.com/u/settings) → API Keys"
+        },
+        "uigenai.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub Personal Access Token for GitHub Pages deployment",
+          "markdownDescription": "Create a token with 'repo' scope at [github.com/settings/tokens](https://github.com/settings/tokens)"
+        },
         "uigenai.netlifyToken": {
           "type": "string",
           "default": "",
@@ -151,6 +163,8 @@
           "type": "string",
           "enum": [
             "vercel",
+            "render",
+            "github-pages",
             "netlify",
             "zip"
           ],

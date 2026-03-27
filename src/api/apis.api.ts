@@ -8,6 +8,7 @@ export type WorkflowState =
   | "READY_TO_DEPLOY"
   | "DEPLOYING"
   | "DEPLOYED"
+  | "DEPLOY_FAILED"
   | "FAILED"
   | null;
 
@@ -54,9 +55,45 @@ export const apisApi = {
       }),
     ),
 
-  /** Validated transition to READY_TO_DEPLOY */
-  markReadyToDeploy: async (id: string): Promise<Api> =>
-    unwrap(await getApi().post(`/api/apis/${id}/ready-to-deploy`)),
+  /** Validated transition to READY_TO_DEPLOY (idempotent) */
+  markReadyToDeploy: async (id: string): Promise<Api> => {
+    try {
+      return unwrap(await getApi().post(`/api/apis/${id}/ready-to-deploy`));
+    } catch (e: any) {
+      // Handle idempotent case - if already ready, get current state
+      if (e?.response?.status === 400) {
+        const api = await apisApi.getById(id);
+        // If already in a deploy-ready or later state, return success
+        if (
+          api.workflow_state === "READY_TO_DEPLOY" ||
+          api.workflow_state === "DEPLOYING" ||
+          api.workflow_state === "DEPLOYED" ||
+          api.workflow_state === "DEPLOY_FAILED"
+        ) {
+          return api;
+        }
+      }
+      throw e;
+    }
+  },
+
+  /** Check if API is ready for deployment */
+  canDeploy: (api: Api): boolean => {
+    return (
+      api.workflow_state === "READY_TO_DEPLOY" ||
+      api.workflow_state === "DEPLOY_FAILED"
+    );
+  },
+
+  /** Check if API has been deployed */
+  isDeployed: (api: Api): boolean => {
+    return api.workflow_state === "DEPLOYED";
+  },
+
+  /** Check if deployment is in progress */
+  isDeploying: (api: Api): boolean => {
+    return api.workflow_state === "DEPLOYING";
+  },
 
   /** List generation sessions scoped to this API */
   listSessions: async (
