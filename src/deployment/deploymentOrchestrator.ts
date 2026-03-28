@@ -241,6 +241,7 @@ async function executeStartDeployment(
       state: DeploymentState.FAILED,
       error: e.message || "Deployment failed",
       errorCode: "UNKNOWN",
+      deploymentId: undefined, // deployment not created or failed before creating
     };
   }
 }
@@ -268,6 +269,7 @@ async function executeDeployment(
         state: DeploymentState.FAILED,
         error: validation.errors.join("; "),
         errorCode: "VALIDATION_FAILED",
+        deploymentId,
       };
     }
 
@@ -281,6 +283,7 @@ async function executeDeployment(
 
     // Execute deployment
     const result = await provider.createDeployment(files, config, onProgress);
+    result.deploymentId = deploymentId;
 
     return result;
   } catch (e: any) {
@@ -290,6 +293,7 @@ async function executeDeployment(
       state: DeploymentState.FAILED,
       error: e.message || "Deployment execution failed",
       errorCode: "EXECUTION_ERROR",
+      deploymentId,
     };
   }
 }

@@ -341,6 +341,26 @@ export class DashboardProvider implements vscode.WebviewViewProvider {
             vscode.commands.executeCommand("uigenai.refreshSidebar");
           }
           break;
+        case "fixDeploymentWithAI":
+          {
+            try {
+              vscode.window.showInformationMessage("🤖 AI Fix started. Analyzing deployment error...");
+              const latestDep = await deploymentsApi.getLatest(msg.apiId);
+              if (!latestDep || !deploymentsApi.isFailed(latestDep)) {
+                vscode.window.showWarningMessage("No failed deployment found to fix.");
+                break;
+              }
+              const details = await deploymentsApi.getWithDetails(msg.apiId, latestDep.id);
+              const errorCtx = details.error || "Unknown deployment error";
+              const result = await deploymentsApi.fixWithAI(msg.apiId, latestDep.id, `Fix this deployment error: ${errorCtx}`);
+              vscode.window.showInformationMessage("✅ AI Fix applied! Refreshing workflow...");
+              await this._loadApiWorkflow(msg.apiId);
+              vscode.commands.executeCommand("uigenai.refreshSidebar");
+            } catch (e: any) {
+              vscode.window.showErrorMessage(`AI Fix failed: ${e.message || String(e)}`);
+            }
+          }
+          break;
 
         /* ---- API Documents ---- */
         case "loadApiDocuments":
@@ -1607,6 +1627,11 @@ ${
           🚀 Deploy
         </button>
       </div>
+      <div class="wf-cta" style="margin-top:8px">
+        <button class="btn-p" id="wf-btn-aifix" onclick="fixWithAI()" style="width:100%;padding:10px;font-size:13px;background:#e74c3c;display:none">
+          🤖 Fix with AI
+        </button>
+      </div>
       <div class="wf-meta" id="wf-status" style="text-align:center;margin-top:8px">Select an OpenAPI file to start</div>
     </div>
   </div>
@@ -2316,6 +2341,14 @@ function renderWorkflow(payload) {
     }
   }
 
+  // AI Fix button - only visible when deploy failed
+  const btnAiFix = document.getElementById('wf-btn-aifix');
+  if (btnAiFix) {
+    btnAiFix.style.display = isDeployFailed ? '' : 'none';
+    btnAiFix.disabled = false;
+    btnAiFix.title = 'Let AI analyze the deploy error and attempt to fix the source code';
+  }
+
   // Render sessions lists
   const allPreview = payload.allPreviewSessions || [];
   const allFull = payload.allFullSessions || [];
@@ -2424,6 +2457,20 @@ function deployApi() {
     return;
   }
   send('deployApi', { apiId: selectedApiId });
+}
+
+function fixWithAI() {
+  console.log('[uigenai][workflow] fixWithAI called', selectedApiId);
+  if (!selectedApiId) {
+    setWorkflowMessage("Select an API first.");
+    return;
+  }
+  const btn = document.getElementById('wf-btn-aifix');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ AI is fixing...';
+  }
+  send('fixDeploymentWithAI', { apiId: selectedApiId });
 }
 
 function reviewSession(sessionId, mode) {

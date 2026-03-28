@@ -24,6 +24,8 @@ export type WorkflowState =
   | "DEPLOYING"
   | "DEPLOYED"
   | "DEPLOY_FAILED"
+  | "FIXING_WITH_AI"
+  | "USER_FIX_REQUIRED"
   | "FAILED"
   | null;
 

@@ -111,4 +111,17 @@ export const deploymentsApi = {
       errorCode: deployment.metadata_json?.errorCode,
     };
   },
+
+  /** Fix workflows */
+  fixWithAI: async (apiId: string, id: string, prompt?: string): Promise<any> =>
+    unwrap(await getApi().post(`/api/apis/${apiId}/deployments/${id}/fix-with-ai`, { prompt })),
+
+  autoFix: async (apiId: string, id: string): Promise<any> =>
+    unwrap(await getApi().post(`/api/apis/${apiId}/deployments/${id}/auto-fix`)),
+
+  markUserFix: async (apiId: string, id: string): Promise<any> =>
+    unwrap(await getApi().post(`/api/apis/${apiId}/deployments/${id}/mark-user-fix`)),
+
+  getLogs: async (apiId: string, id: string): Promise<{errorMsg: string, metadataJson: any}> =>
+    unwrap(await getApi().get(`/api/apis/${apiId}/deployments/${id}/logs`)),
 };
