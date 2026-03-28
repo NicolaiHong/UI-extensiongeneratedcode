@@ -134,6 +134,53 @@ export async function showSessionReviewPanel(
           break;
         }
 
+        case "deployToProvider": {
+          if (!opts?.apiId) {
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: "API ID is required for deployment.",
+            });
+            break;
+          }
+          try {
+            const { quickDeploy } = await import("../deployment/deploymentOrchestrator");
+            const result = await quickDeploy(opts.apiId);
+            
+            if (result) {
+              if (result.success) {
+                panel.webview.postMessage({
+                  type: "status",
+                  level: "success",
+                  message: `Deployed successfully! URL: ${result.url}`,
+                });
+                vscode.window.showInformationMessage(
+                  `Deployed to ${result.url}`,
+                  "Open URL"
+                ).then((action) => {
+                  if (action === "Open URL" && result.url) {
+                    vscode.env.openExternal(vscode.Uri.parse(result.url));
+                  }
+                });
+              } else {
+                panel.webview.postMessage({
+                  type: "status",
+                  level: "error",
+                  message: `Deployment failed: ${result.error}`,
+                });
+              }
+              vscode.commands.executeCommand("uigenai.refreshSidebar");
+            }
+          } catch (e: any) {
+            panel.webview.postMessage({
+              type: "status",
+              level: "error",
+              message: `Deployment error: ${e.message || e}`,
+            });
+          }
+          break;
+        }
+
         case "download": {
           if (files.length === 0) {
             vscode.window.showWarningMessage("No files to download.");
@@ -437,12 +484,14 @@ ${
   <button class="btn btn-primary" onclick="action('applyAll')">📁 Apply All</button>
   <button class="btn btn-secondary" onclick="action('download')">⬇️ Download ZIP</button>
   ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#6f42c1" onclick="action('deployToProvider')">🚀 Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
 `
     : `
 <div class="actions">
   ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#4ec9b0;color:#0a0a0a" onclick="action('markReady')">✅ Mark Ready to Deploy</button>` : ""}
+  ${canMarkReady && session.status === "SUCCEEDED" ? `<button class="btn btn-primary" style="background:#6f42c1" onclick="action('deployToProvider')">🚀 Deploy</button>` : ""}
   <button class="btn btn-danger" onclick="action('deleteSession')">🗑️ Delete Session</button>
 </div>
 `
